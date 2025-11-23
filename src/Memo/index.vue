@@ -1,7 +1,7 @@
 <script setup lang="ts">
+import type { MemoItemType } from '../Memo/memo';
 import { ref, computed } from 'vue';
 import MemoItem from './MemoItem.vue';
-import type { MemoItemType } from '../Memo/memo';
 import Papa from 'papaparse';
 
 // 备忘数据源

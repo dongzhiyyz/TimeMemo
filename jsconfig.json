@@ -2,7 +2,8 @@
   "compilerOptions": {
     "allowJs": true,
     "types": [
-      "utools-api-types"
+      "utools-api-types",
+      "papaparse"
     ],
     "lib": [
       "ES2017",
