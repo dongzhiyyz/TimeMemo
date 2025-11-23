@@ -4,4 +4,5 @@ export interface MemoItemType {
   createdAt: Date;              // 创建时间
   completed: boolean;           // 是否完成
   completedAt?: Date | null;    // 完成时间
+  folderId?: number | null;     // 所属文件夹
 }

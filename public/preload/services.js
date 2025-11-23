@@ -9,9 +9,14 @@ window.services = {
   },
   // 文本写入到下载目录
   writeTextFile (text) {
-    const filePath = path.join(window.utools.getPath('downloads'), Date.now().toString() + '.txt')
+    const filePath = path.join(window.utools.getPath('downloads'), 'TimeMemo' + Date.now().toString() + '.txt')
     fs.writeFileSync(filePath, text, { encoding: 'utf-8' })
     return filePath
+  },
+  // 文本写入到指定路径
+  writeTextFile2 (file, text) {
+    fs.writeFileSync(file, text, { encoding: 'utf-8' })
+    return file
   },
   // 图片写入到下载目录
   writeImageFile (base64Url) {

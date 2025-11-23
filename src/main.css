@@ -1,21 +1,29 @@
 :root {
   --blue: rgb(88, 164, 246);
   --light: #fff;
+  --text: #2c3e50;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --radius: 8px;
+  --space: 10px;
 }
 
 html,
 body {
   margin: 0;
   padding: 0;
+  color: var(--text);
 }
 
 button {
   border: none;
-  background: none var(--blue);
+  background: var(--blue);
   color: var(--light);
   line-height: 2.5;
   cursor: pointer;
   transition: opacity .2s;
+  padding: 0 12px;
+  border-radius: var(--radius);
 }
 
 button:disabled {
@@ -30,6 +38,81 @@ button:not(:disabled):active {
 textarea {
   display: block;
   margin: 0;
+}
+
+/* 布局 */
+.container {
+  display: flex;
+  width: 100%;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+.sidebar {
+  width: 240px;
+  border-right: 1px solid var(--border);
+  padding: var(--space);
+}
+
+.main {
+  flex: 1;
+  padding: var(--space);
+}
+
+.section-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-secondary {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.btn-secondary.active {
+  background: var(--blue);
+  color: var(--light);
+}
+
+.btn-secondary:hover {
+  filter: brightness(0.97);
+}
+
+.folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+input[type="text"], input[type="search"], input[type="number"], select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  outline: none;
 }
 
 @media (prefers-color-scheme: light) {
@@ -60,4 +143,15 @@ textarea {
     background-color: #303133;
     color: #fff;
   }
+
+  .btn-secondary {
+    background: #3f3f46;
+    color: #e5e7eb;
+  }
+  .btn-secondary.active {
+    background: var(--blue);
+    color: var(--light);
+  }
+  .sidebar { border-color: #4b5563; }
+  input[type="text"], input[type="search"], input[type="number"], select { border-color: #4b5563; background: #1f2937; color: #e5e7eb; }
 }
