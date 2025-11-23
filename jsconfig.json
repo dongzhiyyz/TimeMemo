@@ -5,13 +5,13 @@
       "utools-api-types"
     ],
     "lib": [
-      "ES2015",
+      "ES2017",
       "DOM"
     ]
   },
   "include": [
     "src/**/*.vue",
     "src/**/*.js",
-    "public/preload/services.d.ts"
-  ]
+    "public/preload/services.d.ts", 
+    ]
 }

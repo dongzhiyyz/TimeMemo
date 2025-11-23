@@ -1,31 +1,39 @@
 <script lang="ts" setup>
 import { onMounted, ref } from 'vue';
-import Hello from './Hello/index.vue'
-import Read from './Read/index.vue'
-import Write from './Write/index.vue'
+import Memo from './Memo/index.vue'
 
-const route = ref('')
+// 路由状态，用于控制显示哪个组件，默认显示Hello组件
+const route = ref('memo') 
+// 存储uTools插件进入时的参数信息
 const enterAction = ref({})
 
+// 组件挂载后执行的钩子函数
 onMounted(() => {
-  window.utools.onPluginEnter((action) => {
-    route.value = action.code
-    enterAction.value = action
-  })
-  window.utools.onPluginOut((isKill) => {
-    route.value = ''
-  })
+  // 检查是否在uTools环境中运行
+  if (window.utools) {
+    // 监听uTools插件进入事件
+    window.utools.onPluginEnter((action) => {
+      // 根据进入方式的code设置当前路由
+      route.value = action.code
+      // 保存进入参数，传递给子组件
+      enterAction.value = action
+    })
+    
+    // 监听uTools插件退出事件
+    window.utools.onPluginOut((isKill) => {
+      // 清空路由状态
+      route.value = ''
+    })
+  }
 })
 </script>
 
 <template>
-  <template v-if="route === 'hello'">
-    <Hello :enterAction="enterAction"></Hello>
+  <!-- 条件渲染：根据route值显示不同组件 -->
+  
+  <!-- 当route为'hello'或空字符串时显示Hello组件 -->
+  <template v-if="route === 'memo' || route === ''">
+    <Memo :enterAction="enterAction"></Memo>
   </template>
-  <template v-if="route === 'read'">
-    <Read :enterAction="enterAction"></Read>
-  </template>
-  <template v-if="route === 'write'">
-    <Write :enterAction="enterAction"></Write>
-  </template>
+  
 </template>
