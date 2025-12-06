@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref } from 'vue';
-import { defineProps, defineEmits } from 'vue';
 import type { MemoItemType } from '../Memo/memo';
 
 // 接收父组件传入的备忘条目数据
