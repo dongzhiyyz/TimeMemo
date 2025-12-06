@@ -1,17 +1,60 @@
 <script setup lang="ts">
 import type { MemoItemType } from '../Memo/memo';
-import { ref, computed } from 'vue';
+import { ref, computed, toRaw, watch } from 'vue';
 import MemoItem from './MemoItem.vue';
 import Papa from 'papaparse';
+// @ts-ignore
+import { debounce } from 'lodash-es'
 
-// 备忘数据源
-const memoList = ref<MemoItemType[]>([]);
-// 勾选的备忘ID列表（管理模式用）
-const selectedIds = ref<number[]>([]);
-// UI：是否显示左侧边栏
-const showSidebar = ref(true);
-// 文件输入引用（用于导入CSV）
-const fileInputRef = ref<HTMLInputElement | null>(null);
+
+const memoList = ref<MemoItemType[]>([]);// 备忘数据源
+const selectedIds = ref<number[]>([]);// 勾选的备忘ID列表（管理模式用）
+const showSidebar = ref(true);// UI：是否显示左侧边栏
+const fileInputRef = ref<HTMLInputElement | null>(null);// 文件输入引用（用于导入CSV）
+
+let timeMemoDoc: DbDoc<{ data: MemoItemType[] }>;
+const docId = 'time_memo_1';
+
+const reviveDates = (arr: MemoItemType[]) =>
+  arr.map((it) => {
+    const x = { ...it };
+    if (x.createdAt && !(x.createdAt instanceof Date)) x.createdAt = new Date(x.createdAt);
+    if (x.completedAt && !(x.completedAt instanceof Date)) x.completedAt = new Date(x.completedAt);
+    return x;
+  });
+
+const doc = utools.db.get(docId) as DbDoc<{ data: MemoItemType[] }> | null;
+if (doc) {
+  timeMemoDoc = doc;
+  let temp = Array.isArray(doc.data) ? reviveDates(doc.data) : [];
+  temp.forEach(m => {
+    memoList.value.push({ ...m });
+  });
+} else {
+  const newDoc: DbDoc<{ data: MemoItemType[] }> = { _id: docId, data: [] };
+  const result = utools.db.put(newDoc);
+  if (result.ok) {
+    newDoc._rev = result.rev;
+    timeMemoDoc = newDoc;
+    memoList.value = [];
+  }
+}
+
+// 防抖保存
+let saving = false;
+const saveToDb = debounce(() => {
+  if (saving) return;
+  saving = true;
+  timeMemoDoc.data = toRaw(memoList.value);
+  const result = utools.db.put(timeMemoDoc);
+  if (result?.ok) timeMemoDoc._rev = result.rev;
+  saving = false;
+}, 500);
+
+// 深度监听 → 任何修改都触发
+watch(memoList, () => {
+  saveToDb();
+}, { deep: true });
 
 // ---------- 文件夹管理 ----------
 type Folder = { id: number; name: string };
@@ -250,20 +293,15 @@ const importCsvText = (text: string) => {
     // 读取基本字段
     const idStr = cols[iId];
     const content = cols[iContent] ?? '';
-
     const createdAt = cols[iCreated] ? new Date(cols[iCreated]) : new Date();
     const completed = String(cols[iCompleted]).toLowerCase() === 'true';
-
-    const completedAt = cols[iCompletedAt]
-      ? new Date(cols[iCompletedAt])
-      : null;
+    const completedAt = cols[iCompletedAt] ? new Date(cols[iCompletedAt]) : null;
 
     // ----- 处理文件夹 -----
     const folderName = (cols[iFolderName] || '').trim();
     const folderIdStr = cols[iFolderId];
 
     let folderId: number | null = null;
-
     if (folderName) {
       // 有名字 → 按名字归类
       folderId = ensureFolderByName(folderName);
@@ -382,8 +420,10 @@ const onImportFileChange = (e: Event) => {
         <button class="btn-secondary" @click="addFolder">添加</button>
       </div>
       <div class="folder-list">
-        <button class="btn-secondary" :class="{ active: currentFolderId===null }" @click="setCurrentFolder(null)">全部</button>
-        <button class="btn-secondary" v-for="f in folders" :key="f.id" :class="{ active: currentFolderId===f.id }" @click="setCurrentFolder(f.id)">{{ f.name }}</button>
+        <button class="btn-secondary" :class="{ active: currentFolderId === null }"
+          @click="setCurrentFolder(null)">全部</button>
+        <button class="btn-secondary" v-for="f in folders" :key="f.id" :class="{ active: currentFolderId === f.id }"
+          @click="setCurrentFolder(f.id)">{{ f.name }}</button>
       </div>
     </aside>
 
@@ -416,7 +456,8 @@ const onImportFileChange = (e: Event) => {
       <!-- 管理工具栏（管理模式下显示） -->
       <div v-if="manageMode" class="toolbar">
         <label style="display:flex;align-items:center;gap:6px;">
-          <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll(($event.target as HTMLInputElement).checked)" />
+          <input type="checkbox" :checked="isAllSelected"
+            @change="toggleSelectAll(($event.target as HTMLInputElement).checked)" />
           全选当前列表
         </label>
         <button @click="bulkDeleteSelected" :disabled="selectedIds.length === 0">删除选中</button>
@@ -425,21 +466,18 @@ const onImportFileChange = (e: Event) => {
         <select v-model.number="moveTargetFolderId">
           <option v-for="f in folders" :key="f.id" :value="f.id">{{ f.name }}</option>
         </select>
-        <button @click="bulkMoveSelected" :disabled="selectedIds.length === 0 || moveTargetFolderId==null">移动到文件夹</button>
+        <button @click="bulkMoveSelected"
+          :disabled="selectedIds.length === 0 || moveTargetFolderId == null">移动到文件夹</button>
       </div>
 
       <!-- 列表行 -->
       <div v-for="item in sortedList" :key="item.id" class="list-row">
-        <input v-if="manageMode" type="checkbox"
-          :checked="selectedIds.includes(item.id)"
+        <input v-if="manageMode" type="checkbox" :checked="selectedIds.includes(item.id)"
           @change="toggleSelect(item.id, ($event.target as HTMLInputElement).checked)" />
         <div style="flex:1;">
-          <MemoItem
-            :item="item"
-            @update="updateContent"
-            @toggle="toggleComplete" />
+          <MemoItem :item="item" @update="updateContent" @toggle="toggleComplete" />
         </div>
       </div>
     </main>
   </div>
- </template>
+</template>
