@@ -1,60 +1,13 @@
 <script setup lang="ts">
 import type { MemoItemType } from '../Memo/memo';
-import { ref, computed, toRaw, watch } from 'vue';
+import { memoList } from '../Memo/memo';
+import { ref, computed} from 'vue';
 import MemoItem from './MemoItem.vue';
 import Papa from 'papaparse';
-// @ts-ignore
-import { debounce } from 'lodash-es'
 
-
-const memoList = ref<MemoItemType[]>([]);// 备忘数据源
 const selectedIds = ref<number[]>([]);// 勾选的备忘ID列表（管理模式用）
 const showSidebar = ref(true);// UI：是否显示左侧边栏
 const fileInputRef = ref<HTMLInputElement | null>(null);// 文件输入引用（用于导入CSV）
-
-let timeMemoDoc: DbDoc<{ data: MemoItemType[] }>;
-const docId = 'time_memo_1';
-
-const reviveDates = (arr: MemoItemType[]) =>
-  arr.map((it) => {
-    const x = { ...it };
-    if (x.createdAt && !(x.createdAt instanceof Date)) x.createdAt = new Date(x.createdAt);
-    if (x.completedAt && !(x.completedAt instanceof Date)) x.completedAt = new Date(x.completedAt);
-    return x;
-  });
-
-const doc = utools.db.get(docId) as DbDoc<{ data: MemoItemType[] }> | null;
-if (doc) {
-  timeMemoDoc = doc;
-  let temp = Array.isArray(doc.data) ? reviveDates(doc.data) : [];
-  temp.forEach(m => {
-    memoList.value.push({ ...m });
-  });
-} else {
-  const newDoc: DbDoc<{ data: MemoItemType[] }> = { _id: docId, data: [] };
-  const result = utools.db.put(newDoc);
-  if (result.ok) {
-    newDoc._rev = result.rev;
-    timeMemoDoc = newDoc;
-    memoList.value = [];
-  }
-}
-
-// 防抖保存
-let saving = false;
-const saveToDb = debounce(() => {
-  if (saving) return;
-  saving = true;
-  timeMemoDoc.data = toRaw(memoList.value);
-  const result = utools.db.put(timeMemoDoc);
-  if (result?.ok) timeMemoDoc._rev = result.rev;
-  saving = false;
-}, 500);
-
-// 深度监听 → 任何修改都触发
-watch(memoList, () => {
-  saveToDb();
-}, { deep: true });
 
 // ---------- 文件夹管理 ----------
 type Folder = { id: number; name: string };
@@ -84,7 +37,6 @@ const setCurrentFolder = (id: number | null) => {
 };
 
 // 获取无重复 ID
-// 生成未占用的备忘ID
 const getNextId = () => {
   const used = new Set(memoList.value.map(m => m.id));
   let id = 1;
