@@ -1,5 +1,16 @@
-import { ref, Ref, toRaw, watch } from 'vue';
+import { ref, Ref, toRaw, watch, reactive } from 'vue';
 
+const DOC_ID: string = 'time_memo_1';
+
+export interface Folder {
+  id: number;
+  name: string
+};
+export interface DocData {
+  memos: MemoItemType[];
+  currFolderId: number;
+  folders: Folder[];
+}
 export interface MemoItemType {
   id: number;                   // 唯一标识符
   content: string;              // 备忘内容
@@ -8,12 +19,18 @@ export interface MemoItemType {
   completedAt?: Date | null;    // 完成时间
   folderId?: number | null;     // 所属文件夹
 }
-
-const docId: string = 'time_memo_1';
-export const memoList: Ref<MemoItemType[]> = ref<MemoItemType[]>([]);// 备忘数据源
-
-let timeMemoDoc: DbDoc<{ data: MemoItemType[] }>;
-const doc = utools.db.get(docId) as DbDoc<{ data: MemoItemType[] }> | null;
+export interface GlobalVal {
+  memoList: MemoItemType[];
+  currFolderId: number;
+  folder: Folder[];
+  doc: DbDoc<DocData> | null;
+}
+export const glb = reactive<GlobalVal>({
+  memoList: [],
+  currFolderId: 1,
+  folder: [{ id: 1, name: '默认' }],
+  doc: null,
+});
 
 
 function throttle<T extends (...args: any[]) => any>(fn: T, interval = 500) {
@@ -46,31 +63,62 @@ const reviveDates = (arr: MemoItemType[]) => arr.map((it) => {
 });
 
 
-// 防抖保存
 export const saveToDb = throttle(() => {
-  timeMemoDoc.data = toRaw(memoList.value);
-  const result = utools.db.put(timeMemoDoc);
-  if (result?.ok) timeMemoDoc._rev = result.rev;
+  glb.doc.memos = toRaw(glb.memoList);
+  glb.doc.folders = toRaw(glb.folder);
+  glb.doc.currFolderId = glb.currFolderId;
+  const result = utools.db.put(glb.doc);
+  if (result?.ok) glb.doc._rev = result.rev;
 }, 500);
 
-
+const doc = utools.db.get(DOC_ID) as DbDoc<DocData> | null;
 if (doc) {
-  timeMemoDoc = doc;
-  let temp = Array.isArray(doc.data) ? reviveDates(doc.data) : [];
-  temp.forEach(m => {
-    memoList.value.push({ ...m });
+  glb.doc = doc;
+  const rawMemos: MemoItemType[] = Array.isArray(doc.memos)
+    ? reviveDates(doc.memos)
+    : Array.isArray(doc.memos)
+      ? reviveDates(doc.memos)
+      : [];
+
+  const rawFolders: Folder[] = Array.isArray(doc.folders) ? doc.folders : [];
+  const rawCurrentFolderId: number | null = typeof doc.currFolderId === 'number' ? doc.currFolderId : null;
+
+  if (rawFolders.length > 0) {
+    glb.folder = rawFolders.slice();
+    glb.currFolderId = rawCurrentFolderId ?? (glb.folder[0]?.id ?? null);
+  } else {
+    const used = new Set<number>();
+    rawMemos.forEach(m => {
+      if (typeof m.folderId === 'number') used.add(m.folderId as number);
+    });
+    if (used.size === 0) {
+      glb.folder = [{ id: 1, name: '默认' }];
+      glb.currFolderId = 1;
+    } else {
+      const list: Folder[] = Array.from(used).map(id => ({ id, name: `文件夹${id}` }));
+      glb.folder = list.length > 0 ? list : [{ id: 1, name: '默认' }];
+      glb.currFolderId = glb.folder[0]?.id ?? null;
+    }
+  }
+
+  rawMemos.forEach(m => {
+    let fid: number | null = m.folderId ?? glb.currFolderId ?? null;
+    if (fid != null && !glb.folder.some(f => f.id === fid)) {
+      glb.folder.push({ id: fid, name: `文件夹${fid}` });
+    }
+    m.folderId = fid;
+    glb.memoList.push({ ...m });
   });
 } else {
-  const newDoc: DbDoc<{ data: MemoItemType[] }> = { _id: docId, data: [] };
+  const newDoc: DbDoc<DocData> = { _id: DOC_ID, currFolderId: glb.currFolderId, memos: [], folders: [] };
   const result = utools.db.put(newDoc);
   if (result.ok) {
     newDoc._rev = result.rev;
-    timeMemoDoc = newDoc;
-    memoList.value = [];
+    glb.doc = newDoc;
+    glb.memoList = [];
   }
 }
 
-// 深度监听 → 任何修改都触发
-watch(memoList, () => {
+watch([glb.memoList, glb.folder, glb.currFolderId], () => {
   saveToDb();
 }, { deep: true });

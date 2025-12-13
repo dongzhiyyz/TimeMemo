@@ -1,44 +1,54 @@
 <script setup lang="ts">
 import type { MemoItemType } from '../Memo/memo';
-import { memoList } from '../Memo/memo';
-import { ref, computed} from 'vue';
+import { glb } from '../Memo/memo';
+import { ref, computed, reactive } from 'vue';
 import MemoItem from './MemoItem.vue';
 import Papa from 'papaparse';
 
-const selectedIds = ref<number[]>([]);// 勾选的备忘ID列表（管理模式用）
-const showSidebar = ref(true);// UI：是否显示左侧边栏
-const fileInputRef = ref<HTMLInputElement | null>(null);// 文件输入引用（用于导入CSV）
 
-// ---------- 文件夹管理 ----------
-type Folder = { id: number; name: string };
-const folders = ref<Folder[]>([{ id: 1, name: '默认' }]);
-const currentFolderId = ref<number | null>(1);
-const newFolderName = ref('');
+interface GlobalState {
+  selectedIds: number[];
+  showSidebar: boolean;
+  fileInputRef: HTMLInputElement | null;
+  newFolderName: string;
+  // ---------- 管理模式与批量 ----------
+  manageMode: boolean;
+
+}
+
+const state = reactive<GlobalState>({
+  selectedIds: [],
+  showSidebar: true,
+  fileInputRef: null,
+  newFolderName: '',
+  // ---------- 管理模式与批量 ----------
+  manageMode: false,
+});
 
 // 生成未占用的文件夹ID
 const getNextFolderId = () => {
-  const used = new Set(folders.value.map(f => f.id));
+  const used = new Set(glb.folder.map(f => f.id));
   let id = 1;
   while (used.has(id)) id++;
   return id;
 };
 
 const addFolder = () => {
-  const name = newFolderName.value.trim();
+  const name = state.newFolderName.trim();
   if (!name) return;
   const id = getNextFolderId();
-  folders.value.push({ id, name });
-  currentFolderId.value = id;
-  newFolderName.value = '';
+  glb.folder.push({ id, name });
+  glb.currFolderId = id;
+  state.newFolderName = '';
 };
 
 const setCurrentFolder = (id: number | null) => {
-  currentFolderId.value = id;
+  glb.currFolderId = id;
 };
 
 // 获取无重复 ID
 const getNextId = () => {
-  const used = new Set(memoList.value.map(m => m.id));
+  const used = new Set(glb.memoList.map(m => m.id));
   let id = 1;
   while (used.has(id)) id++;
   return id;
@@ -46,57 +56,55 @@ const getNextId = () => {
 
 // ---------- 新增 ----------
 const addMemo = () => {
-  memoList.value.push({
+  glb.memoList.push({
     id: getNextId(),
     content: '',
     createdAt: new Date(),
     completed: false,
     completedAt: null,
-    folderId: currentFolderId.value ?? null,
+    folderId: glb.currFolderId ?? null,
   });
 };
 
 // ---------- 子组件更新 ----------
 const updateContent = (id: number, content: string) => {
-  const item = memoList.value.find(m => m.id === id);
+  const item = glb.memoList.find(m => m.id === id);
   if (item) item.content = content;
 };
 
 const toggleComplete = (id: number) => {
-  const item = memoList.value.find(m => m.id === id);
+  const item = glb.memoList.find(m => m.id === id);
   if (!item) return;
   item.completed = !item.completed; // 切换完成状态
   item.completedAt = item.completed ? new Date() : null; // 完成时间设为当前时间或 null
 };
 
-// ---------- 管理模式与批量 ----------
-const manageMode = ref(false);
 
 const toggleSelect = (id: number, checked: boolean) => {
-  const arr = selectedIds.value.slice();
+  const arr = state.selectedIds.slice();
   const i = arr.indexOf(id);
   if (checked && i === -1) arr.push(id);
   if (!checked && i !== -1) arr.splice(i, 1);
-  selectedIds.value = arr;
+  state.selectedIds = arr;
 };
 
 const bulkDeleteSelected = () => {
-  if (selectedIds.value.length === 0) return;
-  const ok = window.confirm(`确定删除选中的 ${selectedIds.value.length} 条备忘？`);
+  if (state.selectedIds.length === 0) return;
+  const ok = window.confirm(`确定删除选中的 ${state.selectedIds.length} 条备忘？`);
   if (!ok) return;
-  const ids = new Set(selectedIds.value);
-  memoList.value = memoList.value.filter(m => !ids.has(m.id));
-  selectedIds.value = [];
+  const ids = new Set(state.selectedIds);
+  glb.memoList = glb.memoList.filter(m => !ids.has(m.id));
+  state.selectedIds = [];
 };
 
-const moveTargetFolderId = ref<number | null>(folders.value[0]?.id ?? null);
+const moveTargetFolderId = ref<number | null>(glb.folder[0]?.id ?? null);
 const bulkMoveSelected = () => {
-  if (selectedIds.value.length === 0 || moveTargetFolderId.value == null) return;
-  const ids = new Set(selectedIds.value);
-  memoList.value.forEach(m => {
+  if (state.selectedIds.length === 0 || moveTargetFolderId.value == null) return;
+  const ids = new Set(state.selectedIds);
+  glb.memoList.forEach(m => {
     if (ids.has(m.id)) m.folderId = moveTargetFolderId.value as number;
   });
-  selectedIds.value = [];
+  state.selectedIds = [];
 };
 
 // ---------- 排序 ----------
@@ -116,9 +124,9 @@ const setSortBy = (key: 'time' | 'status') => {
 };
 
 const sortedList = computed(() => {
-  const arr = memoList.value.filter(m => {
-    if (currentFolderId.value == null) return true; // 全部
-    return m.folderId === currentFolderId.value;
+  const arr = glb.memoList.filter(m => {
+    if (glb.currFolderId == null) return true; // 全部
+    return m.folderId === glb.currFolderId;
   }).slice();
 
   if (sortKey.value === 'time') {
@@ -139,14 +147,14 @@ const sortedList = computed(() => {
 });
 
 const allViewIds = computed(() => sortedList.value.map(m => m.id));
-const isAllSelected = computed(() => allViewIds.value.length > 0 && allViewIds.value.every(id => selectedIds.value.includes(id)));
+const isAllSelected = computed(() => allViewIds.value.length > 0 && allViewIds.value.every(id => state.selectedIds.includes(id)));
 const toggleSelectAll = (checked: boolean) => {
   if (checked) {
-    const set = new Set<number>([...selectedIds.value, ...allViewIds.value]);
-    selectedIds.value = Array.from(set);
+    const set = new Set<number>([...state.selectedIds, ...allViewIds.value]);
+    state.selectedIds = Array.from(set);
   } else {
     const removeSet = new Set<number>(allViewIds.value);
-    selectedIds.value = selectedIds.value.filter(id => !removeSet.has(id));
+    state.selectedIds = state.selectedIds.filter(id => !removeSet.has(id));
   }
 };
 
@@ -161,7 +169,7 @@ const escapeCsv = (v: unknown) => {
 
 const folderNameById = (id: number | null | undefined) => {
   if (id == null) return '';
-  const f = folders.value.find(x => x.id === id);
+  const f = glb.folder.find(x => x.id === id);
   return f ? f.name : '';
 };
 
@@ -174,12 +182,12 @@ const toCsvRow = (m: MemoItemType) => {
 };
 
 const exportCsv = async () => {
-  if (memoList.value.length === 0) {
+  if (glb.memoList.length === 0) {
     window.alert('没有数据可导出');
     return;
   }
   const header = 'id,content,createdAt,completed,completedAt,folderId,folderName';
-  const lines = [header, ...memoList.value.map(toCsvRow)];
+  const lines = [header, ...glb.memoList.map(toCsvRow)];
   const text = lines.join('\n');
   const suggestedName = `TimeMemo_${Date.now()}.csv`;
 
@@ -211,11 +219,11 @@ const parseCsv = (text: string): string[][] => {
 
 const ensureFolderByName = (name: string) => {
   const key = (name || '').trim();
-  if (!key) return currentFolderId.value ?? (folders.value[0]?.id ?? 1);
-  const existing = folders.value.find(f => f.name === key);
+  if (!key) return glb.currFolderId ?? (glb.folder[0]?.id ?? 1);
+  const existing = glb.folder.find(f => f.name === key);
   if (existing) return existing.id;
   const id = getNextFolderId();
-  folders.value.push({ id, name: key });
+  glb.folder.push({ id, name: key });
   return id;
 };
 
@@ -262,7 +270,7 @@ const importCsvText = (text: string) => {
       folderId = Number(folderIdStr);
     } else {
       // 都没有 → 用当前文件夹（保持你的旧逻辑）
-      folderId = currentFolderId.value ?? null;
+      folderId = glb.currFolderId ?? null;
     }
 
     // 处理ID
@@ -275,7 +283,7 @@ const importCsvText = (text: string) => {
   if (incoming.length === 0) return;
 
   // ---------- 处理重复ID ----------
-  const existingIds = new Set(memoList.value.map(m => m.id));
+  const existingIds = new Set(glb.memoList.map(m => m.id));
   const duplicates = incoming.filter(m => Number.isFinite(m.id) && existingIds.has(m.id));
 
   // --- 有重复 ID ---
@@ -297,9 +305,9 @@ const importCsvText = (text: string) => {
       if (keepImport) {
         // 覆盖已有项
         duplicates.forEach(m => {
-          const idx = memoList.value.findIndex(x => x.id === m.id);
+          const idx = glb.memoList.findIndex(x => x.id === m.id);
           if (idx >= 0) {
-            const t = memoList.value[idx];
+            const t = glb.memoList[idx];
             t.content = m.content;
             t.createdAt = m.createdAt;
             t.completed = m.completed;
@@ -314,7 +322,7 @@ const importCsvText = (text: string) => {
           .forEach(m => {
             const isValid = Number.isFinite(m.id) && !existingIds.has(m.id);
             const nid = isValid ? m.id : getNextId();
-            memoList.value.push({ ...m, id: nid });
+            glb.memoList.push({ ...m, id: nid });
           });
 
         return;
@@ -325,7 +333,7 @@ const importCsvText = (text: string) => {
           .forEach(m => {
             const isValid = Number.isFinite(m.id) && !existingIds.has(m.id);
             const nid = isValid ? m.id : getNextId();
-            memoList.value.push({ ...m, id: nid });
+            glb.memoList.push({ ...m, id: nid });
           });
 
         return;
@@ -337,12 +345,12 @@ const importCsvText = (text: string) => {
   incoming.forEach(m => {
     const isValid = Number.isFinite(m.id) && !existingIds.has(m.id);
     const nid = isValid ? m.id : getNextId();
-    memoList.value.push({ ...m, id: nid });
+    glb.memoList.push({ ...m, id: nid });
     existingIds.add(nid);
   });
 };
 
-const triggerImport = () => fileInputRef.value?.click();
+const triggerImport = () => state.fileInputRef?.click();
 const onImportFileChange = (e: Event) => {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -365,16 +373,16 @@ const onImportFileChange = (e: Event) => {
   <!-- 主布局容器 -->
   <div class="container">
     <!-- 左侧文件夹栏 -->
-    <aside v-if="showSidebar" class="sidebar">
+    <aside v-if="state.showSidebar" class="sidebar">
       <div style="font-weight:bold;margin-bottom:8px;">文件夹</div>
       <div class="toolbar-left" style="margin-bottom:8px;">
-        <input placeholder="输入名称" v-model="newFolderName" />
+        <input placeholder="输入名称" v-model="state.newFolderName" />
         <button class="btn-secondary" @click="addFolder">添加</button>
       </div>
       <div class="folder-list">
-        <button class="btn-secondary" :class="{ active: currentFolderId === null }"
+        <button class="btn-secondary" :class="{ active: glb.currFolderId === null }"
           @click="setCurrentFolder(null)">全部</button>
-        <button class="btn-secondary" v-for="f in folders" :key="f.id" :class="{ active: currentFolderId === f.id }"
+        <button class="btn-secondary" v-for="f in glb.folder" :key="f.id" :class="{ active: glb.currFolderId === f.id }"
           @click="setCurrentFolder(f.id)">{{ f.name }}</button>
       </div>
     </aside>
@@ -385,8 +393,10 @@ const onImportFileChange = (e: Event) => {
       <div class="toolbar">
         <div class="toolbar-left">
           <button @click="addMemo">新增备忘</button>
-          <button class="btn-secondary" @click="manageMode = !manageMode">{{ manageMode ? '退出管理' : '管理' }}</button>
-          <button class="btn-secondary" @click="showSidebar = !showSidebar">{{ showSidebar ? '隐藏边栏' : '显示边栏' }}</button>
+          <button class="btn-secondary" @click="state.manageMode = !state.manageMode">{{ state.manageMode ? '退出管理' :
+            '管理' }}</button>
+          <button class="btn-secondary" @click="state.showSidebar = !state.showSidebar">{{ state.showSidebar ? '隐藏边栏' :
+            '显示边栏' }}</button>
         </div>
         <div class="toolbar-right">
           <button class="btn-secondary" @click="setSortBy('time')">
@@ -406,25 +416,25 @@ const onImportFileChange = (e: Event) => {
       </div>
 
       <!-- 管理工具栏（管理模式下显示） -->
-      <div v-if="manageMode" class="toolbar">
+      <div v-if="state.manageMode" class="toolbar">
         <label style="display:flex;align-items:center;gap:6px;">
           <input type="checkbox" :checked="isAllSelected"
             @change="toggleSelectAll(($event.target as HTMLInputElement).checked)" />
           全选当前列表
         </label>
-        <button @click="bulkDeleteSelected" :disabled="selectedIds.length === 0">删除选中</button>
+        <button @click="bulkDeleteSelected" :disabled="state.selectedIds.length === 0">删除选中</button>
         <button @click="exportCsv">导出CSV</button>
         <button class="btn-secondary" @click="triggerImport">导入CSV</button>
         <select v-model.number="moveTargetFolderId">
-          <option v-for="f in folders" :key="f.id" :value="f.id">{{ f.name }}</option>
+          <option v-for="f in glb.folder" :key="f.id" :value="f.id">{{ f.name }}</option>
         </select>
         <button @click="bulkMoveSelected"
-          :disabled="selectedIds.length === 0 || moveTargetFolderId == null">移动到文件夹</button>
+          :disabled="state.selectedIds.length === 0 || moveTargetFolderId == null">移动到文件夹</button>
       </div>
 
       <!-- 列表行 -->
       <div v-for="item in sortedList" :key="item.id" class="list-row">
-        <input v-if="manageMode" type="checkbox" :checked="selectedIds.includes(item.id)"
+        <input v-if="state.manageMode" type="checkbox" :checked="state.selectedIds.includes(item.id)"
           @change="toggleSelect(item.id, ($event.target as HTMLInputElement).checked)" />
         <div style="flex:1;">
           <MemoItem :item="item" @update="updateContent" @toggle="toggleComplete" />
