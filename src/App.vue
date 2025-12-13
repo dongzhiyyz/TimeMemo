@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 import Memo from './Memo/index.vue'
 import { onMounted, ref } from 'vue';
-import { saveToDb } from './Memo/memo';
+import { saveToDbSnapshot } from './Memo/memo';
 
 const route = ref('时间笔记') // 路由状态，用于控制显示哪个组件，默认显示Hello组件
 const enterAction = ref({}) // 存储uTools插件进入时的参数信息
@@ -18,7 +18,7 @@ onMounted(() => {
 
     // 监听uTools插件退出事件
     window.utools.onPluginOut((isKill) => {
-      saveToDb.force()
+      saveToDbSnapshot()
       route.value = '' // 清空路由状态
     })
   }

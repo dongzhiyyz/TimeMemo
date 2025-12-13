@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { MemoItemType } from '../Memo/memo';
-import { glb } from '../Memo/memo';
+import { glb, startAutoSave } from '../Memo/memo';
 import { ref, computed, reactive } from 'vue';
 import MemoItem from './MemoItem.vue';
 import Papa from 'papaparse';
@@ -27,7 +27,7 @@ const state = reactive<GlobalState>({
 
 // 生成未占用的文件夹ID
 const getNextFolderId = () => {
-  const used = new Set(glb.folder.map(f => f.id));
+  const used = new Set(glb.folders.map(f => f.id));
   let id = 1;
   while (used.has(id)) id++;
   return id;
@@ -37,7 +37,7 @@ const addFolder = () => {
   const name = state.newFolderName.trim();
   if (!name) return;
   const id = getNextFolderId();
-  glb.folder.push({ id, name });
+  glb.folders.push({ id, name });
   glb.currFolderId = id;
   state.newFolderName = '';
 };
@@ -79,7 +79,6 @@ const toggleComplete = (id: number) => {
   item.completedAt = item.completed ? new Date() : null; // 完成时间设为当前时间或 null
 };
 
-
 const toggleSelect = (id: number, checked: boolean) => {
   const arr = state.selectedIds.slice();
   const i = arr.indexOf(id);
@@ -97,7 +96,7 @@ const bulkDeleteSelected = () => {
   state.selectedIds = [];
 };
 
-const moveTargetFolderId = ref<number | null>(glb.folder[0]?.id ?? null);
+const moveTargetFolderId = ref<number | null>(glb.folders[0]?.id ?? null);
 const bulkMoveSelected = () => {
   if (state.selectedIds.length === 0 || moveTargetFolderId.value == null) return;
   const ids = new Set(state.selectedIds);
@@ -169,7 +168,7 @@ const escapeCsv = (v: unknown) => {
 
 const folderNameById = (id: number | null | undefined) => {
   if (id == null) return '';
-  const f = glb.folder.find(x => x.id === id);
+  const f = glb.folders.find(x => x.id === id);
   return f ? f.name : '';
 };
 
@@ -219,11 +218,11 @@ const parseCsv = (text: string): string[][] => {
 
 const ensureFolderByName = (name: string) => {
   const key = (name || '').trim();
-  if (!key) return glb.currFolderId ?? (glb.folder[0]?.id ?? 1);
-  const existing = glb.folder.find(f => f.name === key);
+  if (!key) return glb.currFolderId ?? (glb.folders[0]?.id ?? 1);
+  const existing = glb.folders.find(f => f.name === key);
   if (existing) return existing.id;
   const id = getNextFolderId();
-  glb.folder.push({ id, name: key });
+  glb.folders.push({ id, name: key });
   return id;
 };
 
@@ -366,6 +365,7 @@ const onImportFileChange = (e: Event) => {
   };
   reader.readAsText(file, 'utf-8');
 };
+
 </script>
 
 
@@ -382,7 +382,7 @@ const onImportFileChange = (e: Event) => {
       <div class="folder-list">
         <button class="btn-secondary" :class="{ active: glb.currFolderId === null }"
           @click="setCurrentFolder(null)">全部</button>
-        <button class="btn-secondary" v-for="f in glb.folder" :key="f.id" :class="{ active: glb.currFolderId === f.id }"
+        <button class="btn-secondary" v-for="f in glb.folders" :key="f.id" :class="{ active: glb.currFolderId === f.id }"
           @click="setCurrentFolder(f.id)">{{ f.name }}</button>
       </div>
     </aside>
@@ -426,7 +426,7 @@ const onImportFileChange = (e: Event) => {
         <button @click="exportCsv">导出CSV</button>
         <button class="btn-secondary" @click="triggerImport">导入CSV</button>
         <select v-model.number="moveTargetFolderId">
-          <option v-for="f in glb.folder" :key="f.id" :value="f.id">{{ f.name }}</option>
+          <option v-for="f in glb.folders" :key="f.id" :value="f.id">{{ f.name }}</option>
         </select>
         <button @click="bulkMoveSelected"
           :disabled="state.selectedIds.length === 0 || moveTargetFolderId == null">移动到文件夹</button>

@@ -22,18 +22,15 @@ export interface MemoItemType {
 export interface GlobalVal {
   memoList: MemoItemType[];
   currFolderId: number;
-  folder: Folder[];
-  doc: DbDoc<DocData> | null;
+  folders: Folder[];
 }
 export const glb = reactive<GlobalVal>({
   memoList: [],
   currFolderId: 1,
-  folder: [{ id: 1, name: '默认' }],
-  doc: null,
+  folders: [{ id: 1, name: '默认' }],
 });
 
-
-function throttle<T extends (...args: any[]) => any>(fn: T, interval = 500) {
+export function throttle<T extends (...args: any[]) => any>(fn: T, interval = 500) {
   let lastExec = 0;
 
   const throttled = (...args: Parameters<T>) => {
@@ -54,7 +51,6 @@ function throttle<T extends (...args: any[]) => any>(fn: T, interval = 500) {
   return throttled;
 }
 
-
 const reviveDates = (arr: MemoItemType[]) => arr.map((it) => {
   const x = { ...it };
   if (x.createdAt && !(x.createdAt instanceof Date)) x.createdAt = new Date(x.createdAt);
@@ -62,49 +58,44 @@ const reviveDates = (arr: MemoItemType[]) => arr.map((it) => {
   return x;
 });
 
+// export const saveToDb = throttle(() => {
+//   timeMemoDoc.memos = toRaw(glb.memoList);
+//   timeMemoDoc.folders = toRaw(glb.folders);
+//   timeMemoDoc.currFolderId = glb.currFolderId;
+//   const result = utools.db.put(timeMemoDoc);
+//   if (result?.ok) timeMemoDoc._rev = result.rev;
+// }, 500);
 
-export const saveToDb = throttle(() => {
-  glb.doc.memos = toRaw(glb.memoList);
-  glb.doc.folders = toRaw(glb.folder);
-  glb.doc.currFolderId = glb.currFolderId;
-  const result = utools.db.put(glb.doc);
-  if (result?.ok) glb.doc._rev = result.rev;
-}, 500);
-
-const doc = utools.db.get(DOC_ID) as DbDoc<DocData> | null;
+let timeMemoDoc: DbDoc<DocData>;
+const doc: DbDoc<DocData> | null = utools.db.get(DOC_ID);
 if (doc) {
-  glb.doc = doc;
-  const rawMemos: MemoItemType[] = Array.isArray(doc.memos)
-    ? reviveDates(doc.memos)
-    : Array.isArray(doc.memos)
-      ? reviveDates(doc.memos)
-      : [];
-
+  timeMemoDoc = doc;
+  const rawMemos: MemoItemType[] = Array.isArray(doc.memos) ? reviveDates(doc.memos) : [];
   const rawFolders: Folder[] = Array.isArray(doc.folders) ? doc.folders : [];
   const rawCurrentFolderId: number | null = typeof doc.currFolderId === 'number' ? doc.currFolderId : null;
 
   if (rawFolders.length > 0) {
-    glb.folder = rawFolders.slice();
-    glb.currFolderId = rawCurrentFolderId ?? (glb.folder[0]?.id ?? null);
+    glb.folders = rawFolders.slice();
+    glb.currFolderId = rawCurrentFolderId ?? (glb.folders[0]?.id ?? null);
   } else {
     const used = new Set<number>();
     rawMemos.forEach(m => {
       if (typeof m.folderId === 'number') used.add(m.folderId as number);
     });
     if (used.size === 0) {
-      glb.folder = [{ id: 1, name: '默认' }];
+      glb.folders = [{ id: 1, name: '默认' }];
       glb.currFolderId = 1;
     } else {
       const list: Folder[] = Array.from(used).map(id => ({ id, name: `文件夹${id}` }));
-      glb.folder = list.length > 0 ? list : [{ id: 1, name: '默认' }];
-      glb.currFolderId = glb.folder[0]?.id ?? null;
+      glb.folders = list.length > 0 ? list : [{ id: 1, name: '默认' }];
+      glb.currFolderId = glb.folders[0]?.id ?? null;
     }
   }
 
   rawMemos.forEach(m => {
     let fid: number | null = m.folderId ?? glb.currFolderId ?? null;
-    if (fid != null && !glb.folder.some(f => f.id === fid)) {
-      glb.folder.push({ id: fid, name: `文件夹${fid}` });
+    if (fid != null && !glb.folders.some(f => f.id === fid)) {
+      glb.folders.push({ id: fid, name: `文件夹${fid}` });
     }
     m.folderId = fid;
     glb.memoList.push({ ...m });
@@ -114,11 +105,33 @@ if (doc) {
   const result = utools.db.put(newDoc);
   if (result.ok) {
     newDoc._rev = result.rev;
-    glb.doc = newDoc;
+    timeMemoDoc = newDoc;
     glb.memoList = [];
   }
 }
 
-watch([glb.memoList, glb.folder, glb.currFolderId], () => {
-  saveToDb();
+export function saveToDbSnapshot() {
+  if (!timeMemoDoc) return;
+
+ timeMemoDoc.memos = toRaw(glb.memoList);
+ timeMemoDoc.folders = toRaw(glb.folders);
+ timeMemoDoc.currFolderId = toRaw(glb.currFolderId);
+  const result = utools.db.put(timeMemoDoc);
+  if (result?.ok)
+     timeMemoDoc._rev = result.rev;
+}
+
+// 自动保存
+let timer: number | null = null;
+export function startAutoSave() {
+  if (timer !== null) return;
+
+  timer = window.setInterval(() => {
+    saveToDbSnapshot();
+  }, 800); // 500~1000ms 都可以
+}
+// startAutoSave();
+
+watch(glb, () => {
+  saveToDbSnapshot();
 }, { deep: true });
