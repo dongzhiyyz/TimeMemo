@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { MemoItemType } from '../Memo/memo';
-import { glb, startAutoSave } from '../Memo/memo';
+import { glb } from '../Memo/memo';
 import { ref, computed, reactive } from 'vue';
 import MemoItem from './MemoItem.vue';
 import Papa from 'papaparse';
@@ -13,7 +13,6 @@ interface GlobalState {
   newFolderName: string;
   // ---------- 管理模式与批量 ----------
   manageMode: boolean;
-
 }
 
 const state = reactive<GlobalState>({
@@ -382,8 +381,8 @@ const onImportFileChange = (e: Event) => {
       <div class="folder-list">
         <button class="btn-secondary" :class="{ active: glb.currFolderId === null }"
           @click="setCurrentFolder(null)">全部</button>
-        <button class="btn-secondary" v-for="f in glb.folders" :key="f.id" :class="{ active: glb.currFolderId === f.id }"
-          @click="setCurrentFolder(f.id)">{{ f.name }}</button>
+        <button class="btn-secondary" v-for="f in glb.folders" :key="f.id"
+          :class="{ active: glb.currFolderId === f.id }" @click="setCurrentFolder(f.id)">{{ f.name }}</button>
       </div>
     </aside>
 
