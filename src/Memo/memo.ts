@@ -1,5 +1,6 @@
-import { ref, Ref, toRaw, watch, reactive } from 'vue';
+import { toRaw, watch, reactive } from 'vue';
 
+const DOC_ID_OLD: string = 'time_memo_1';
 const DOC_ID: string = 'time_memo_1';
 
 export interface Folder {
@@ -48,23 +49,37 @@ export interface GlobalVal {
 
 const reviveDates = (arr: MemoItemType[]) => arr.map((it) => {
   const x = { ...it };
-  if (x.createdAt && !(x.createdAt instanceof Date)) x.createdAt = new Date(x.createdAt);
-  if (x.completedAt && !(x.completedAt instanceof Date)) x.completedAt = new Date(x.completedAt);
+  if (x.createdAt) x.createdAt = new Date(x.createdAt);
+  if (x.completedAt) x.completedAt = new Date(x.completedAt);
   return x;
 });
 
 export function saveToDbSnapshot() {
   if (!timeMemoDoc) return;
 
-  timeMemoDoc.memos = toRaw(glb.memoList);
+  timeMemoDoc.memos = glb.memoList.map(item => ({
+    id: item.id,
+    content: item.content,
+    createdAt: item.createdAt?.getTime(),
+    completed: item.completed,
+    completedAt: item.completedAt?.getTime()
+  }))
   timeMemoDoc.folders = toRaw(glb.folders);
-  timeMemoDoc.currFolderId = toRaw(glb.currFolderId);
+  timeMemoDoc.currFolderId = glb.currFolderId;
   const result = utools.db.put(timeMemoDoc);
   if (result?.ok)
     timeMemoDoc._rev = result.rev;
 }
 
 function loadDbDoc() {
+  // const doc_old: DbDoc<DocData> | null = utools.db.get(DOC_ID_OLD);
+  // if (doc_old) {
+  //   const result = utools.db.put({ ...doc_old, _id: DOC_ID, memos: reviveDates((doc_old as any).data) });
+  //   if (result.ok) {
+  //     doc_old._rev = result.rev;
+  //     utools.db.remove(doc_old);
+  //   }
+  // }
   const doc: DbDoc<DocData> | null = utools.db.get(DOC_ID);
   if (doc) {
     timeMemoDoc = doc;
@@ -115,14 +130,14 @@ function watchGlb() {
   }, { deep: true });
 }
 
-let timeMemoDoc: DbDoc<DocData>;
+let timeMemoDoc: any;
 export const glb = reactive<GlobalVal>({
   memoList: [],
   currFolderId: 1,
   folders: [{ id: 1, name: '默认' }],
 });
 loadDbDoc();
-watchGlb();
+// watchGlb();
 
 // 自动保存
 // let timer: number | null = null;

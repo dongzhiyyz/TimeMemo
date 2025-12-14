@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import type { MemoItemType } from '../Memo/memo';
-import { glb } from '../Memo/memo';
-import { ref, computed, reactive } from 'vue';
+import { glb, saveToDbSnapshot } from '../Memo/memo';
+import { ref, computed, reactive, nextTick } from 'vue';
+import { useConfirm } from '../confirm/confirm';
 import MemoItem from './MemoItem.vue';
 import Papa from 'papaparse';
 
-
+// const fileInputRef = ref<HTMLInputElement | null>(null);// 文件输入引用（用于导入CSV）
 interface GlobalState {
   selectedIds: number[];
   showSidebar: boolean;
-  fileInputRef: HTMLInputElement | null;
+  // fileInputRef: HTMLInputElement | null;
   newFolderName: string;
   // ---------- 管理模式与批量 ----------
   manageMode: boolean;
@@ -18,11 +19,13 @@ interface GlobalState {
 const state = reactive<GlobalState>({
   selectedIds: [],
   showSidebar: true,
-  fileInputRef: null,
+  // fileInputRef: null,
   newFolderName: '',
   // ---------- 管理模式与批量 ----------
   manageMode: false,
 });
+
+const memoRefs = new Map<number, any>();
 
 // 生成未占用的文件夹ID
 const getNextFolderId = () => {
@@ -55,27 +58,46 @@ const getNextId = () => {
 
 // ---------- 新增 ----------
 const addMemo = () => {
-  glb.memoList.push({
+  const item:MemoItemType = {
     id: getNextId(),
     content: '',
     createdAt: new Date(),
     completed: false,
     completedAt: null,
     folderId: glb.currFolderId ?? null,
+  }
+  glb.memoList.push(item);
+  nextTick(() => {
+    const comp = memoRefs.get(item.id);
+    comp?.inputRef?.focus?.();
   });
 };
 
 // ---------- 子组件更新 ----------
 const updateContent = (id: number, content: string) => {
-  const item = glb.memoList.find(m => m.id === id);
-  if (item) item.content = content;
+  if (content) {
+    const item = glb.memoList.find(m => m.id === id);
+    if (item) item.content = content;
+  } else {
+    glb.memoList = glb.memoList.filter(m => m.id !== id);
+    saveToDbSnapshot();
+  }
 };
 
-const toggleComplete = (id: number) => {
+const deleteMemo = (id: number) => {
+  useConfirm(`确定删除该备忘？`).then(ok => {
+    if (!ok) return;
+
+    glb.memoList = glb.memoList.filter(m => m.id !== id);
+    saveToDbSnapshot();
+  });
+};
+
+const setCompleted = (id: number, checked: boolean) => {
   const item = glb.memoList.find(m => m.id === id);
   if (!item) return;
-  item.completed = !item.completed; // 切换完成状态
-  item.completedAt = item.completed ? new Date() : null; // 完成时间设为当前时间或 null
+  item.completed = checked;
+  item.completedAt = checked ? new Date() : null;
 };
 
 const toggleSelect = (id: number, checked: boolean) => {
@@ -88,11 +110,14 @@ const toggleSelect = (id: number, checked: boolean) => {
 
 const bulkDeleteSelected = () => {
   if (state.selectedIds.length === 0) return;
-  const ok = window.confirm(`确定删除选中的 ${state.selectedIds.length} 条备忘？`);
-  if (!ok) return;
-  const ids = new Set(state.selectedIds);
-  glb.memoList = glb.memoList.filter(m => !ids.has(m.id));
-  state.selectedIds = [];
+  useConfirm(`确定删除选中的 ${state.selectedIds.length} 条备忘？`).then(ok => {
+    if (!ok) return;
+
+    const ids = new Set(state.selectedIds);
+    glb.memoList = glb.memoList.filter(m => !ids.has(m.id));
+    state.selectedIds = [];
+    saveToDbSnapshot();
+  });
 };
 
 const moveTargetFolderId = ref<number | null>(glb.folders[0]?.id ?? null);
@@ -157,34 +182,57 @@ const toggleSelectAll = (checked: boolean) => {
 };
 
 // ---------- CSV 导出/导入 ----------
-const escapeCsv = (v: unknown) => {
-  if (v === null || v === undefined) return '';
-  const s = String(v);
-  const needsQuote = /[",\n]/.test(s);
-  const escaped = s.replace(/"/g, '""');
-  return needsQuote ? `"${escaped}"` : escaped;
-};
+function formatDateCN(date: Date | string | undefined | null): string {
+  if (!date) return '';
+  const d = date instanceof Date ? date : new Date(date);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
 
-const folderNameById = (id: number | null | undefined) => {
+function escapeCsv(str: string | number | boolean): string {
+  const s = String(str ?? '');
+  if (s.includes('"') || s.includes(',') || s.includes('\n') || s.includes('\r')) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function folderNameById(id: number | null | undefined): string {
   if (id == null) return '';
   const f = glb.folders.find(x => x.id === id);
   return f ? f.name : '';
-};
+}
 
 const toCsvRow = (m: MemoItemType) => {
-  const created = m.createdAt instanceof Date ? m.createdAt.toISOString() : new Date(m.createdAt).toISOString();
-  const completedAt = m.completedAt ? (m.completedAt instanceof Date ? m.completedAt.toISOString() : new Date(m.completedAt).toISOString()) : '';
-  const folderIdStr = m.folderId === null || m.folderId === undefined ? '' : String(m.folderId);
+  const created = formatDateCN(m.createdAt); // 人眼可读
+  const createdNum = m.createdAt ? +new Date(m.createdAt) : ''; // 时间戳
+
+  const completedAt = m.completedAt ? formatDateCN(m.completedAt) : '';
+  const completedNum = m.completedAt ? +new Date(m.completedAt) : '';
+
+  const folderIdStr = m.folderId == null ? '' : String(m.folderId);
   const folderNameStr = escapeCsv(folderNameById(m.folderId));
-  return [m.id, escapeCsv(m.content), created, m.completed, completedAt, folderIdStr, folderNameStr].join(',');
+
+  return [
+    m.id,
+    escapeCsv(m.content),
+    created,
+    m.completed,
+    completedAt,
+    folderIdStr,
+    folderNameStr,
+    createdNum,
+    completedNum,
+  ].join(',');
 };
+
 
 const exportCsv = async () => {
   if (glb.memoList.length === 0) {
     window.alert('没有数据可导出');
     return;
   }
-  const header = 'id,content,createdAt,completed,completedAt,folderId,folderName';
+  const header = 'id,content,created,completed,completedAt,folderId,folderName,createdNum,completedNum,';
   const lines = [header, ...glb.memoList.map(toCsvRow)];
   const text = lines.join('\n');
   const suggestedName = `TimeMemo_${Date.now()}.csv`;
@@ -202,7 +250,7 @@ const exportCsv = async () => {
 
     if (filePath) {
       window.services.writeTextFile2(filePath, text);
-      window.alert(`已导出到: ${filePath}`);
+      // window.alert(`已导出到: ${filePath}`);
     }
   }
 };
@@ -225,11 +273,10 @@ const ensureFolderByName = (name: string) => {
   return id;
 };
 
-const importCsvText = (text: string) => {
+const importCsvText = async (text: string) => {
   const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
   if (lines.length <= 1) return;
 
-  // 解析表头
   const header = lines[0].split(',');
   const idx = (name: string) => header.indexOf(name);
 
@@ -243,35 +290,28 @@ const importCsvText = (text: string) => {
 
   const incoming: MemoItemType[] = [];
 
-  // ---------- 逐行解析 ----------
   for (let k = 1; k < lines.length; k++) {
     const cols = parseCsv(lines[k])[0];
     if (!cols || cols.length < header.length) continue;
 
-    // 读取基本字段
     const idStr = cols[iId];
     const content = cols[iContent] ?? '';
     const createdAt = cols[iCreated] ? new Date(cols[iCreated]) : new Date();
     const completed = String(cols[iCompleted]).toLowerCase() === 'true';
     const completedAt = cols[iCompletedAt] ? new Date(cols[iCompletedAt]) : null;
 
-    // ----- 处理文件夹 -----
     const folderName = (cols[iFolderName] || '').trim();
     const folderIdStr = cols[iFolderId];
 
     let folderId: number | null = null;
     if (folderName) {
-      // 有名字 → 按名字归类
       folderId = ensureFolderByName(folderName);
     } else if (folderIdStr && !Number.isNaN(Number(folderIdStr))) {
-      // 有 folderId → 用 folderId
       folderId = Number(folderIdStr);
     } else {
-      // 都没有 → 用当前文件夹（保持你的旧逻辑）
       folderId = glb.currFolderId ?? null;
     }
 
-    // 处理ID
     const idParsed = Number(idStr);
     const id = Number.isFinite(idParsed) ? idParsed : NaN;
 
@@ -280,24 +320,22 @@ const importCsvText = (text: string) => {
 
   if (incoming.length === 0) return;
 
-  // ---------- 处理重复ID ----------
   const existingIds = new Set(glb.memoList.map(m => m.id));
   const duplicates = incoming.filter(m => Number.isFinite(m.id) && existingIds.has(m.id));
 
   // --- 有重复 ID ---
   if (duplicates.length > 0) {
-    const keepAll = window.confirm(
-      `检测到 ${duplicates.length} 个重复ID。\n\n是否保留已有项并为导入项重新分配ID？`
+    const keepAll = await useConfirm(
+      `检测到 ${duplicates.length} 个重复ID。\n是否保留已有项并为导入项重新分配ID？`
     );
 
     if (keepAll) {
-      // 重新分配ID给重复项
       duplicates.forEach(m => {
         m.id = getNextId();
       });
     } else {
-      const keepImport = window.confirm(
-        '是否保留导入项并覆盖已有项？\n\n“确定”：覆盖已有项\n“取消”：忽略这些重复的导入'
+      const keepImport = await useConfirm(
+        '是否保留导入项并覆盖已有项？\n确定：覆盖已有项\n取消：忽略这些重复导入'
       );
 
       if (keepImport) {
@@ -305,65 +343,63 @@ const importCsvText = (text: string) => {
         duplicates.forEach(m => {
           const idx = glb.memoList.findIndex(x => x.id === m.id);
           if (idx >= 0) {
-            const t = glb.memoList[idx];
-            t.content = m.content;
-            t.createdAt = m.createdAt;
-            t.completed = m.completed;
-            t.completedAt = m.completedAt;
-            t.folderId = m.folderId;
+            glb.memoList[idx] = { ...glb.memoList[idx], ...m };
           }
         });
-
-        // 插入非重复
-        incoming
-          .filter(m => !existingIds.has(m.id))
-          .forEach(m => {
-            const isValid = Number.isFinite(m.id) && !existingIds.has(m.id);
-            const nid = isValid ? m.id : getNextId();
-            glb.memoList.push({ ...m, id: nid });
-          });
-
-        return;
       } else {
-        // 忽略重复项，只加入非重复的
-        incoming
-          .filter(m => !existingIds.has(m.id))
-          .forEach(m => {
-            const isValid = Number.isFinite(m.id) && !existingIds.has(m.id);
-            const nid = isValid ? m.id : getNextId();
-            glb.memoList.push({ ...m, id: nid });
-          });
-
-        return;
+        // 忽略重复项
+        incoming.splice(
+          0,
+          incoming.length,
+          ...incoming.filter(m => !existingIds.has(m.id))
+        );
       }
     }
   }
 
-  // --- 没有重复 ID，直接插入 ---
+  // --- 插入非重复项 ---
   incoming.forEach(m => {
     const isValid = Number.isFinite(m.id) && !existingIds.has(m.id);
     const nid = isValid ? m.id : getNextId();
     glb.memoList.push({ ...m, id: nid });
     existingIds.add(nid);
   });
+
+  saveToDbSnapshot();
 };
 
-const triggerImport = () => state.fileInputRef?.click();
-const onImportFileChange = (e: Event) => {
-  const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) {
-    window.utools.ubrowser.show();
-    return;
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    const text = String(reader.result || '');
-    importCsvText(text);
-    input.value = '';
-  };
-  reader.readAsText(file, 'utf-8');
+const triggerImport = () =>{
+ const filePaths = utools.showOpenDialog({
+    title: '请选择要导入的CSV文件',
+    defaultPath: '',
+    buttonLabel: '导入',
+    filters: [
+      { name: 'CSV 文件', extensions: ['csv'] }
+    ],
+    properties: ['openFile']
+  });
+  
+  if (!filePaths) return;
+  
+  const text = window.services.readFile(filePaths[0]);
+  importCsvText(text);
+
+  //  fileInputRef.value?.click()
 };
+
+// const onImportFileChange = (e: Event) => {
+//   const input = e.target as HTMLInputElement;
+//   const file = input.files?.[0];
+//   if (!file) return;
+  
+//   const reader = new FileReader();
+//   reader.onload = () => {
+//     const text = String(reader.result || '');
+//     importCsvText(text);
+//     input.value = '';
+//   };
+//   reader.readAsText(file, 'utf-8');
+// };
 
 </script>
 
@@ -410,7 +446,7 @@ const onImportFileChange = (e: Event) => {
               {{ sortDirection === 'asc' ? '▲' : '▼' }}
             </span>
           </button>
-          <input ref="fileInputRef" type="file" accept=".csv" style="display:none" @change="onImportFileChange" />
+          <!-- <input ref="fileInputRef" type="file" accept=".csv" style="display:none" @change="onImportFileChange" /> -->
         </div>
       </div>
 
@@ -433,10 +469,22 @@ const onImportFileChange = (e: Event) => {
 
       <!-- 列表行 -->
       <div v-for="item in sortedList" :key="item.id" class="list-row">
-        <input v-if="state.manageMode" type="checkbox" :checked="state.selectedIds.includes(item.id)"
-          @change="toggleSelect(item.id, ($event.target as HTMLInputElement).checked)" />
+        <input
+          v-if="state.manageMode"
+          class="cb-manage"
+          type="checkbox"
+          :checked="state.selectedIds.includes(item.id)"
+          @change="toggleSelect(item.id, ($event.target as HTMLInputElement).checked)"
+        />
+        <input
+          v-else
+          class="cb-complete"
+          type="checkbox"
+          :checked="item.completed"
+          @change="setCompleted(item.id, ($event.target as HTMLInputElement).checked)"
+        />
         <div style="flex:1;">
-          <MemoItem :item="item" @update="updateContent" @toggle="toggleComplete" />
+          <MemoItem :item="item" @update="updateContent" @delete="deleteMemo" :ref="el => memoRefs.set(item.id, el)" />
         </div>
       </div>
     </main>

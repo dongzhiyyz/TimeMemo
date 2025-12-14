@@ -1,108 +1,129 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from 'vue';
-import type { MemoItemType } from '../Memo/memo';
+import { ref, computed, watch } from 'vue'
+import type { MemoItemType } from '../Memo/memo'
 
-// 接收父组件传入的备忘条目数据
-const props = defineProps<{ item: MemoItemType }>();
+const showDetail = ref(false)
+const props = defineProps<{ item: MemoItemType }>()
 const emit = defineEmits<{
-  (e: 'toggle', id: number): void;
-  (e: 'update', id: number, content: string): void;
-}>();
+  (e: 'toggle', id: number): void
+  (e: 'update', id: number, content: string): void
+  (e: 'delete', id: number): void
+}>()
 
-const showDetail = ref(false);
-const popupRef = ref<HTMLElement | null>(null);
-
-// 点击弹窗外部时关闭详细信息
-const handleClickOutside = (event: MouseEvent) => {
-  if (popupRef.value && !popupRef.value.contains(event.target as Node)) {
-    showDetail.value = false;
+/* ---------- 输入框：本地状态 ---------- */
+const localContent = ref(props.item.content)
+watch(
+  () => props.item.content,
+  v => {
+    if (v !== localContent.value) {
+      localContent.value = v
+    }
   }
-};
+)
 
-onMounted(() => {
-  document.addEventListener('click', handleClickOutside, { capture: true });
-});
+// 父 → 子同步（比如切换 memo、外部修改）
+watch(
+  () => props.item.content,
+  v => {
+    if (v !== localContent.value) {
+      localContent.value = v
+    }
+  }
+)
 
-onBeforeUnmount(() => {
-  document.removeEventListener('click', handleClickOutside);
-});
+function onBlur() {
+  if (localContent.value !== props.item.content || !localContent.value) {
+    emit('update', props.item.id, localContent.value)
+  }
+}
 
+function onDelete() {
+  emit('delete', props.item.id)
+  showDetail.value = false
+}
 
-// 输入框内容变更：向父组件派发更新事件
-const onInput = (e: Event) => {
-  const target = e.target as HTMLInputElement;
-  emit('update', props.item.id, target.value);
-};
+/* ---------- 日期工具 ---------- */
+const toDate = (d: Date | string | number | null | undefined) => {
+  if (!d) return null
+  return d instanceof Date ? d : new Date(d)
+}
 
-// 格式化日期：MM-DD
-const formatDateShort = (date: Date | null | undefined) => {
-  if (!date) return '';
-  const d = new Date(date);
-  return `${String(d.getMonth() + 1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-};
+const formatDateShort = (date?: Date | string | number | null) => {
+  const d = toDate(date)
+  if (!d) return ''
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
-// 格式化日期到秒：YYYY-MM-DD HH:mm:ss
-const formatDateFull = (date: Date | null | undefined) => {
-  if (!date) return '';
-  const d = new Date(date);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-};
+const formatDateFull = (date?: Date | string | number | null) => {
+  const d = toDate(date)
+  if (!d) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
 
-// 计算花费时间（创建到完成的时间差）
-const elapsedTime = () => {
-  if (!props.item.completedAt) return '';
-  const diffMs = props.item.completedAt.getTime() - props.item.createdAt.getTime();
-  const diffSec = diffMs / 1000;
+/* ---------- 花费时间：computed ---------- */
+const elapsedTimeText = computed(() => {
+  if (!props.item.completed) return ''
+  const start = toDate(props.item.createdAt)
+  const end = toDate(props.item.completedAt)
+  if (!start || !end) return ''
 
-  if (diffSec < 60) return `${Math.floor(diffSec)} 秒`;
-  const diffMin = diffSec / 60;
-  if (diffMin < 60) return `${Math.floor(diffMin)} 分`;
-  const diffHour = diffMin / 60;
-  if (diffHour < 24) return `${Math.floor(diffHour)} 时`;
-  const diffDay = diffHour / 24;
-  return `${Math.floor(diffDay)} 天`;
-};
+  const diffSec = (end.getTime() - start.getTime()) / 1000
+  if (diffSec < 60) return `${Math.floor(diffSec)} 秒`
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分`
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 时`
+  return `${Math.floor(diffSec / 86400)} 天`
+})
+
+// 只暴露引用，不做任何事
+const inputRef = ref<HTMLInputElement | null>(null)
+defineExpose({
+  inputRef
+})
+
 </script>
 
 <template>
-  <!-- 单条备忘条目 -->
   <div class="memo-item" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;width:100%;">
     <!-- 输入框 -->
-    <input
-      :value="item.content"
-      @input="onInput"
-      placeholder="输入内容..."
+    <input 
+      ref="inputRef"
+      v-model="localContent" 
+      placeholder="输入内容..." 
       style="flex:1;min-width:100px"
+      @blur="onBlur" 
     />
 
-    <!-- 显示时间或花费 -->
+    <!-- 时间 / 花费 -->
     <div>
       <span v-if="!item.completed">{{ formatDateShort(item.createdAt) }}</span>
-      <span v-else>{{ elapsedTime() }}</span>
+      <span v-else>{{ elapsedTimeText }}</span>
     </div>
 
-    <!-- 详细信息按钮：打开弹窗 -->
-    <button @click.stop="showDetail = true" style="padding:2px 4px;">...</button>
-
-    <!-- 状态切换：完成/未完成 -->
-    <button @click="emit('toggle', item.id)">
-      {{ item.completed ? '恢复未完成' : '标记完成' }}
+    <!-- 详情 -->
+    <button @click.stop="showDetail = true" style="padding:2px 6px;">
+      详情
     </button>
 
-    <!-- 详细信息弹窗 -->
-    <div 
-      v-if="showDetail" 
-      ref="popupRef" 
-      class="detail-popup"
-      @click.stop
-    >
-      <div>内容：{{ item.content }}</div>
-      <div>创建时间：{{ formatDateFull(item.createdAt) }}</div>
-      <div v-if="item.completed">完成时间：{{ formatDateFull(item.completedAt) }}</div>
-      <div v-if="item.completed">花费时间：{{ elapsedTime() }}</div>
-    </div>
+    <!-- 详情面板 -->
+    <div v-if="showDetail" class="detail-overlay" @click="showDetail = false">
+      <div class="detail-panel" @click.stop>
+        <div class="panel-header">
+          <div>详细信息</div>
+          <button style="padding:2px 6px;background:#d9534f;color:#fff;border:none;border-radius:2px;"
+            @click.stop="onDelete">
+            删除
+          </button>
+        </div>
 
+        <div class="panel-body">
+          <div>内容：{{ item.content }}</div>
+          <div>创建时间：{{ formatDateFull(item.createdAt) }}</div>
+          <div v-if="item.completed">完成时间：{{ formatDateFull(item.completedAt) }}</div>
+          <div v-if="item.completed">花费时间：{{ elapsedTimeText }}</div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -123,16 +144,48 @@ const elapsedTime = () => {
   cursor: pointer;
 }
 
-/* 弹出详细信息样式 */
-.detail-popup {
+.detail-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+}
+
+.detail-panel {
   position: absolute;
-  top: 30px;
-  left: 0;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 360px;
+  max-width: 80vw;
   background: #fff;
-  border: 1px solid #ccc;
-  padding: 8px;
-  font-size: 12px;
-  z-index: 100;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  animation: slideInRight 0.2s ease-out;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eee;
+  font-weight: bold;
+}
+
+.panel-body {
+  padding: 12px;
+  font-size: 13px;
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+  }
+
+  to {
+    transform: translateX(0);
+  }
 }
 </style>

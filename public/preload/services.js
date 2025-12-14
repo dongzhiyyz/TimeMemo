@@ -15,7 +15,7 @@ window.services = {
   },
   // 文本写入到指定路径
   writeTextFile2 (file, text) {
-    fs.writeFileSync(file, text, { encoding: 'utf-8' })
+    fs.writeFileSync(file, '\uFEFF' + text, { encoding: 'utf-8' })
     return file
   },
   // 图片写入到下载目录

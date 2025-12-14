@@ -108,6 +108,12 @@ textarea {
   width: 100%;
 }
 
+.cb-complete,
+.cb-manage {
+  width: 16px;
+  height: 16px;
+}
+
 input[type="text"], input[type="search"], input[type="number"], select {
   border: 1px solid var(--border);
   border-radius: var(--radius);
