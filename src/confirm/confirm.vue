@@ -4,6 +4,7 @@ import { ref } from 'vue';
 
 const props = defineProps<{
   message: string
+  hasConfirm: boolean
 }>();
 
 const emit = defineEmits<{
@@ -29,7 +30,7 @@ const cancel = () => {
     <div class="dialog" @click.stop>
       <div class="message">{{ message }}</div>
       <div class="buttons">
-        <button @click="confirm">确定</button>
+        <button @click="confirm" v-if="hasConfirm">确定</button>
         <button @click="cancel">取消</button>
       </div>
     </div>

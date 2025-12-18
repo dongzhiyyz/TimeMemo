@@ -17,12 +17,12 @@ export interface MemoItemType {
   folderName: string;           // 所属文件夹名称
 }
 export interface MemoItemSaveType {
-  id: number;                   
-  content: string;              
-  createdAt: number;            
-  completed: boolean;           
-  completedAt?: number | null;  
-  folderName: string;           
+  id: number;
+  content: string;
+  createdAt: number;
+  completed: boolean;
+  completedAt?: number | null;
+  folderName: string;
 }
 export interface GlobalVal {
   memoList: MemoItemType[];
@@ -85,23 +85,36 @@ function type_change(arr: MemoItemSaveType[]): MemoItemType[] {
 export function save_db_memos() {
   if (!doc_memos) return;
 
-  doc_memos.memos = glb.memoList.map(item => (
-    {
-      id: item.id,
-      content: item.content,
-      createdAt: item.createdAt.getTime(),
-      completed: item.completed,
-      completedAt: item.completedAt?.getTime() ?? null,
-      folderName: item.folderName
-    }
-  ))
-  doc_memos.currFolder = toRaw(glb.currFolder);
-  doc_memos.folders = toRaw(glb.folders);
+  // 备忘列表 -> 只保留普通 JS 对象和原始值
+  doc_memos.memos = glb.memoList.map(item => ({
+    id: item.id,
+    content: item.content,
+    createdAt: item.createdAt instanceof Date ? item.createdAt.getTime() : item.createdAt,
+    completed: item.completed,
+    completedAt: item.completedAt instanceof Date ? item.completedAt.getTime() : item.completedAt ?? null,
+    folderName: item.folderName
+  }));
 
-  const result = utools.db.put(doc_memos);
-  if (result?.ok)
-    doc_memos._rev = result.rev
+  // 文件夹列表 -> 浅拷贝成普通对象数组
+  doc_memos.folders = glb.folders.map(f => ({
+    ...f
+  }));
+
+  // 当前选中文件夹 -> 保存普通对象，避免 Proxy
+  doc_memos.currFolder = glb.currFolder ?
+    {
+      ...glb.currFolder
+    }
+    : null;
+
+  try {
+    const result = utools.db.put(doc_memos);
+    if (result?.ok) doc_memos._rev = result.rev;
+  } catch (err) {
+    console.error('保存备忘数据失败', err);
+  }
 }
+
 
 /**
  * 保存所有config到数据库
@@ -140,6 +153,7 @@ function loadDbMemos() {
 
     // ===== 安全生成起始 id / order =====
     let nextOrder = rawFolders.length > 0 ? Math.max(...rawFolders.map(it => it.order)) + 1 : 0;
+    console.log('nextOrder', nextOrder);
 
     // ===== 补缺失的 folder =====
     const newFolders: FolderType[] = [];
@@ -153,6 +167,13 @@ function loadDbMemos() {
     });
 
     rawFolders.push(...newFolders);
+
+    // 查找没有order的文件夹，给它分配一个order
+    rawFolders.forEach(f => {
+      if (!f.order) {
+        f.order = nextOrder++;
+      }
+    });
 
     // ===== 修正 currFolder（防幽灵） =====
     const validCurrFolder = rawFolders.find(f => f.name === rawCurrFolder?.name) ?? rawFolders[0] ?? null;
@@ -206,11 +227,11 @@ function loadDbConfig() {
   glb.fixedCompDown = doc_config.fixedCompDown;
 }
 
-function watchGlb() {
-  watch(glb, () => {
-    save_db_memos();
-  }, { deep: true });
-}
+// function watchGlb() {
+//   watch(glb, () => {
+//     save_db_memos();
+//   }, { deep: true });
+// }
 
 let doc_memos: DbDoc<DocMemos> | null = null;
 let doc_config: DbDoc<DocConfig> | null = null;

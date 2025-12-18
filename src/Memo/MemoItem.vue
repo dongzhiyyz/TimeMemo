@@ -86,13 +86,7 @@ defineExpose({
 <template>
   <div class="memo-item" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;width:100%;">
     <!-- 输入框 -->
-    <input 
-      ref="inputRef"
-      v-model="localContent" 
-      placeholder="输入内容..." 
-      style="flex:1;min-width:100px"
-      @blur="onBlur" 
-    />
+    <input ref="inputRef" v-model="localContent" placeholder="输入内容..." style="flex:1;min-width:100px" @blur="onBlur" />
 
     <!-- 时间 / 花费 -->
     <div>
@@ -116,13 +110,29 @@ defineExpose({
           </button>
         </div>
 
-        <div class="panel-body">
-          <div>内容：{{ item.content }}</div>
-          <div>文件夹：{{ item.folderName }}</div>
-          <div>创建时间：{{ formatDateFull(item.createdAt) }}</div>
-          <div v-if="item.completed">完成时间：{{ formatDateFull(item.completedAt) }}</div>
-          <div v-if="item.completed">花费时间：{{ elapsedTimeText }}</div>
+        <div class="panel-body card">
+          <div class="card-row">
+            <span class="label">内容：</span>
+            <span class="value">{{ item.content }}</span>
+          </div>
+          <div class="card-row">
+            <span class="label">文件夹：</span>
+            <span class="value">{{ item.folderName }}</span>
+          </div>
+          <div class="card-row">
+            <span class="label">创建时间：</span>
+            <span class="value">{{ formatDateFull(item.createdAt) }}</span>
+          </div>
+          <div class="card-row" v-if="item.completed">
+            <span class="label">完成时间：</span>
+            <span class="value">{{ formatDateFull(item.completedAt) }}</span>
+          </div>
+          <div class="card-row" v-if="item.completed">
+            <span class="label">花费时间：</span>
+            <span class="value">{{ elapsedTimeText }}</span>
+          </div>
         </div>
+
       </div>
     </div>
   </div>
@@ -157,7 +167,7 @@ defineExpose({
   top: 0;
   right: 0;
   height: 100%;
-  width: 360px;
+  width: 500px;
   max-width: 80vw;
   background: #fff;
   box-shadow: -2px 0 8px rgba(0, 0, 0, 0.2);
@@ -175,10 +185,32 @@ defineExpose({
   font-weight: bold;
 }
 
-.panel-body {
-  padding: 12px;
-  font-size: 13px;
+.panel-body.card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 12px 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-bottom: 12px;
+  max-width: 500px;
 }
+
+.card-row {
+  display: flex;
+  margin-bottom: 6px;
+}
+
+.card-row .label {
+  width: 100px;
+  font-weight: 600;
+  color: #555;
+}
+
+.card-row .value {
+  flex: 1;
+  color: #333;
+  word-break: break-word;
+}
+
 
 @keyframes slideInRight {
   from {

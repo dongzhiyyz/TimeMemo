@@ -3,6 +3,7 @@ import type { FolderType, MemoItemType } from '../Memo/memo';
 import { glb, save_db_memos, save_db_config } from '../Memo/memo';
 import { ref, computed, reactive, nextTick } from 'vue';
 import { useConfirm } from '../confirm/confirm';
+import { promptInput } from '../confirm/prompt';
 import MemoItem from './MemoItem.vue';
 import Papa from 'papaparse';
 
@@ -25,13 +26,22 @@ const state = reactive<GlobalState>({
   manageMode: false,
 });
 
+function getNextFolderOrder() {
+  const maxOrder = glb.folders.reduce((max, f) => Math.max(max, f.order), -1);
+  return maxOrder + 1;
+}
 const memoRefs = new Map<number, any>();
-
 const addFolder = () => {
   const name = state.newFolderName.trim();
+  if (glb.folders.find(f => f.name === name)) {
+    useConfirm(`文件夹 ${name} 已存在`, false);
+    return;
+  }
   if (!name) return;
-  glb.folders.push({ order: glb.folders.length, name });
-  glb.currFolder = { order: glb.folders.length, name };
+
+  const temp = { order: getNextFolderOrder(), name }
+  glb.folders.push(temp);
+  glb.currFolder = temp;
   state.newFolderName = '';
 };
 
@@ -49,7 +59,7 @@ const getNextMemoId = () => {
 
 // ---------- 新增 ----------
 const addMemo = () => {
-  const item:MemoItemType = {
+  const item: MemoItemType = {
     id: getNextMemoId(),
     content: '',
     createdAt: new Date(),
@@ -113,9 +123,9 @@ const bulkDeleteSelected = () => {
 
 const moveTargetFolderName = ref<string | null>(glb.folders[0]?.name ?? null);
 const bulkMoveSelected = () => {
-  if (state.selectedIds.length === 0 || moveTargetFolderName.value == null) 
+  if (state.selectedIds.length === 0 || moveTargetFolderName.value == null)
     return;
-  
+
   const memoMap = new Map(glb.memoList.map(m => [m.id, m]));
   state.selectedIds.forEach(id => {
     memoMap.get(id)!.folderName = moveTargetFolderName.value!;
@@ -179,8 +189,8 @@ const sortedList = computed(() => {
       return sortDirection.value === 'asc' ? v1 - v2 : v2 - v1;
     });
   }
-  paramToConfig();  
-  save_db_memos();  
+  paramToConfig();
+  save_db_memos();
   return arr;
 });
 
@@ -201,7 +211,7 @@ function formatDateCN(date: Date | string | undefined | null): string {
   if (!date) return '';
   const d = date instanceof Date ? date : new Date(date);
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function escapeCsv(str: string | number | boolean): string {
@@ -362,8 +372,8 @@ const importCsvText = async (text: string) => {
   save_db_memos();
 };
 
-const triggerImport = () =>{
- const filePaths = utools.showOpenDialog({
+const triggerImport = () => {
+  const filePaths = utools.showOpenDialog({
     title: '请选择要导入的CSV文件',
     defaultPath: '',
     buttonLabel: '导入',
@@ -372,9 +382,9 @@ const triggerImport = () =>{
     ],
     properties: ['openFile']
   });
-  
+
   if (!filePaths) return;
-  
+
   const text = window.services.readFile(filePaths[0]);
   importCsvText(text);
 
@@ -385,7 +395,7 @@ const triggerImport = () =>{
 //   const input = e.target as HTMLInputElement;
 //   const file = input.files?.[0];
 //   if (!file) return;
-  
+
 //   const reader = new FileReader();
 //   reader.onload = () => {
 //     const text = String(reader.result || '');
@@ -395,25 +405,116 @@ const triggerImport = () =>{
 //   reader.readAsText(file, 'utf-8');
 // };
 
-</script>
+const deleteFolder = async (folder: FolderType) => {
+  // 1. 先确认是否删除文件夹
+  const confirmDeleteFolder = await useConfirm(`是否删除文件夹 ${folder.name}？`);
+  if (!confirmDeleteFolder) return;
 
+  // 2. 检查该文件夹下是否有备忘项
+  const memosInFolder = glb.memoList.filter(m => m.folderName === folder.name);
+  if (memosInFolder.length > 0) {
+    const confirmDeleteMemos = await useConfirm(
+      `文件夹 ${folder.name} 中仍有 ${memosInFolder.length} 个项目。\n是否删除这些项目？`
+    );
+    if (!confirmDeleteMemos) return;
+
+    // 删除文件夹内的所有备忘项
+    glb.memoList = glb.memoList.filter(m => m.folderName !== folder.name);
+  }
+
+  // 3. 删除文件夹本身
+  glb.folders = glb.folders.filter(f => f !== folder);
+
+  // 4. 如果当前选中的文件夹被删除，清空选中
+  if (glb.currFolder === folder) glb.currFolder = null;
+
+  // 5. 保存数据库
+  save_db_memos();
+};
+
+const contextMenu = reactive({
+  visible: false,
+  x: 0,
+  y: 0,
+  folder: null
+});
+function showContextMenu(event, folder) {
+  contextMenu.visible = true;
+  contextMenu.x = event.clientX;
+  contextMenu.y = event.clientY;
+  contextMenu.folder = folder;
+}
+
+function hideContextMenu() {
+  contextMenu.visible = false;
+}
+
+async function renameFolder(folder: FolderType) {
+  const newName = await promptInput(`重命名文件夹 ${folder.name}`, folder.name);
+
+  if (!newName) return;
+
+  if (glb.folders.some(f => f.name === newName)) {
+    await useConfirm(`文件夹名称 ${newName} 已存在`, false);
+    renameFolder(folder);
+    return;
+  }
+
+  // 更新所有关联的备忘项文件夹名称
+  glb.memoList.forEach(m => {
+    if (m.folderName === folder.name) {
+      m.folderName = newName;
+    }
+  });
+
+  folder.name = newName;
+  save_db_memos();
+}
+
+// function deleteFolder(folder) {
+//   if (confirm(`确定删除 ${folder.name} 吗？`)) {
+//     glb.folders = glb.folders.filter(f => f !== folder);
+//     if (glb.currFolder === folder) glb.currFolder = null;
+//   }
+//   hideContextMenu();
+// }
+
+// 点击空白处隐藏菜单
+document.addEventListener('click', hideContextMenu);
+
+</script>
 
 <template>
   <!-- 主布局容器 -->
   <div class="container">
+
     <!-- 左侧文件夹栏 -->
     <aside v-if="state.showSidebar" class="sidebar">
+
       <div style="font-weight:bold;margin-bottom:8px;">文件夹</div>
+
       <div class="toolbar-left" style="margin-bottom:8px;">
-        <input placeholder="输入名称" v-model="state.newFolderName" />
-        <button class="btn-secondary" @click="addFolder">添加</button>
+        <input placeholder="新文件夹名称" v-model="state.newFolderName" />
       </div>
+      <button class="full-btn" @click="addFolder">添加文件夹</button>
 
       <div class="folder-list">
-        <button class="btn-secondary" :class="{ active: glb.currFolder === null }"
-          @click="setCurrentFolder(null)">全部</button>
-        <button class="btn-secondary" v-for="f in glb.folders" :key="f.order"
-          :class="{ active: glb.currFolder === f }" @click="setCurrentFolder(f)">{{ f.name }}</button>
+        <button class="btn-secondary" :class="{ active: glb.currFolder === null }" @click="setCurrentFolder(null)">
+          全部
+        </button>
+
+        <button class="btn-secondary" v-for="f in glb.folders" :key="f.order" :class="{ active: glb.currFolder === f }"
+          @click="setCurrentFolder(f)" @contextmenu.prevent="showContextMenu($event, f)">
+          <!-- {{ f.name }}_{{ f.order }} -->
+          {{ f.name }}
+        </button>
+      </div>
+
+      <!-- 自定义右键菜单 -->
+      <div v-if="contextMenu.visible" :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
+        class="context-menu" @click="hideContextMenu">
+        <div class="context-menu-item" @click.stop="renameFolder(contextMenu.folder)">重命名</div>
+        <div class="context-menu-item" @click.stop="deleteFolder(contextMenu.folder)">删除</div>
       </div>
 
     </aside>
@@ -422,15 +523,17 @@ const triggerImport = () =>{
     <main class="main">
       <!-- 顶部工具栏：左操作 + 右排序/导入导出 -->
       <div class="toolbar">
+
         <div class="toolbar-left">
           <button @click="addMemo">新增备忘</button>
           <button class="btn-secondary" @click="state.manageMode = !state.manageMode">
             {{ state.manageMode ? '退出管理' : '管理' }}
           </button>
-          <button class="btn-secondary" @click="state.showSidebar = !state.showSidebar">
+          <!-- <button class="btn-secondary" @click="state.showSidebar = !state.showSidebar">
             {{ state.showSidebar ? '隐藏边栏' : '显示边栏' }}
-          </button>
+          </button>         -->
         </div>
+
         <div class="toolbar-right">
           <label style="display:flex;align-items:center;gap:6px;">
             <input type="checkbox" v-model="fixedCompDown" />
@@ -449,6 +552,7 @@ const triggerImport = () =>{
             </span>
           </button>
         </div>
+
       </div>
 
       <!-- 管理工具栏（管理模式下显示） -->
@@ -478,24 +582,15 @@ const triggerImport = () =>{
 
       <!-- 列表行 -->
       <div v-for="item in sortedList" :key="item.id" class="list-row">
-        <input
-          v-if="state.manageMode"
-          class="cb-manage"
-          type="checkbox"
-          :checked="state.selectedIds.includes(item.id)"
-          @change="toggleSelect(item.id, ($event.target as HTMLInputElement).checked)"
-        />
-        <input
-          v-else
-          class="cb-complete"
-          type="checkbox"
-          :checked="item.completed"
-          @change="setCompleted(item.id, ($event.target as HTMLInputElement).checked)"
-        />
+        <input v-if="state.manageMode" class="cb-manage" type="checkbox" :checked="state.selectedIds.includes(item.id)"
+          @change="toggleSelect(item.id, ($event.target as HTMLInputElement).checked)" />
+        <input v-else class="cb-complete" type="checkbox" :checked="item.completed"
+          @change="setCompleted(item.id, ($event.target as HTMLInputElement).checked)" />
         <div style="flex:1;">
           <MemoItem :item="item" @update="updateContent" @delete="deleteMemo" :ref="el => memoRefs.set(item.id, el)" />
         </div>
       </div>
     </main>
+
   </div>
 </template>

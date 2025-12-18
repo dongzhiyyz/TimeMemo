@@ -1,7 +1,7 @@
 import { createApp, h } from 'vue';
 import ConfirmDialog from './confirm.vue';
 
-export function useConfirm(message: string): Promise<boolean> {
+export function useConfirm(message: string, hasConfirm: boolean = true): Promise<boolean> {
   return new Promise((resolve) => {
     const container = document.createElement('div');
     document.body.appendChild(container);
@@ -10,6 +10,7 @@ export function useConfirm(message: string): Promise<boolean> {
       render() {
         return h(ConfirmDialog, {
           message,
+          hasConfirm,
           onConfirm: () => {
             resolve(true);
             app.unmount();
