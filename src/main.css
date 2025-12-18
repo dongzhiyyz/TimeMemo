@@ -135,6 +135,10 @@ input[type="text"], input[type="search"], input[type="number"], select {
   }
 }
 
+.spacer {
+  flex: 1;
+}
+
 @media (prefers-color-scheme: dark) {
   &::-webkit-scrollbar-track-piece {
     background-color: #303133;

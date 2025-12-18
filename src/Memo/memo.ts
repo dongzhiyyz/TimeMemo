@@ -1,29 +1,48 @@
 import { toRaw, watch, reactive } from 'vue';
 
 const DOC_ID_OLD: string = 'time_memo_1';
-const DOC_ID: string = 'time_memo_1';
+const DOC_MEMOS_ID: string = 'time_memo_1';
+const DOC_CONFIG_ID: string = 'time_memo_config';
 
-export interface Folder {
-  id: number;
-  name: string
+export interface FolderType {
+  order: number;
+  name: string;
 };
-export interface DocData {
-  memos: MemoItemType[];
-  currFolderId: number;
-  folders: Folder[];
-}
 export interface MemoItemType {
   id: number;                   // 唯一标识符
   content: string;              // 备忘内容
   createdAt: Date;              // 创建时间
   completed: boolean;           // 是否完成
   completedAt?: Date | null;    // 完成时间
-  folderId?: number | null;     // 所属文件夹
+  folderName: string;           // 所属文件夹名称
+}
+export interface MemoItemSaveType {
+  id: number;                   
+  content: string;              
+  createdAt: number;            
+  completed: boolean;           
+  completedAt?: number | null;  
+  folderName: string;           
 }
 export interface GlobalVal {
   memoList: MemoItemType[];
-  currFolderId: number;
-  folders: Folder[];
+
+  currFolder: FolderType;
+  folders: FolderType[];
+  sortKey: 'status' | 'time';
+  sortDirection: 'asc' | 'desc';
+  fixedCompDown: boolean;
+}
+
+export interface DocConfig {
+  sortKey: 'status' | 'time';     // 排序键
+  sortDirection: 'asc' | 'desc';  // 排序方向
+  fixedCompDown: boolean;         // 固定完成项在底部
+}
+export interface DocMemos {
+  memos: MemoItemSaveType[];
+  currFolder: FolderType | null;  // 当前文件夹
+  folders: FolderType[];          // 文件夹列表
 }
 
 // export function throttle<T extends (...args: any[]) => any>(fn: T, interval = 500) {
@@ -47,96 +66,166 @@ export interface GlobalVal {
 //   return throttled;
 // }
 
-const reviveDates = (arr: MemoItemType[]) => arr.map((it) => {
-  const x = { ...it };
-  if (x.createdAt) x.createdAt = new Date(x.createdAt);
-  if (x.completedAt) x.completedAt = new Date(x.completedAt);
-  return x;
-});
-
-export function saveToDbSnapshot() {
-  if (!timeMemoDoc) return;
-
-  timeMemoDoc.memos = glb.memoList.map(item => ({
-    id: item.id,
-    content: item.content,
-    createdAt: item.createdAt?.getTime(),
-    completed: item.completed,
-    completedAt: item.completedAt?.getTime()
+/**
+ * 转换 MemoItemSaveType 数组为 MemoItemType 数组
+ * @param arr - 输入的 MemoItemSaveType 数组
+ * @returns 转换后的 MemoItemType 数组
+ */
+function type_change(arr: MemoItemSaveType[]): MemoItemType[] {
+  return arr.map(it => ({
+    ...it,
+    createdAt: new Date(it.createdAt),
+    completedAt: it.completedAt ? new Date(it.completedAt) : null,
   }))
-  timeMemoDoc.folders = toRaw(glb.folders);
-  timeMemoDoc.currFolderId = glb.currFolderId;
-  const result = utools.db.put(timeMemoDoc);
-  if (result?.ok)
-    timeMemoDoc._rev = result.rev;
 }
 
-function loadDbDoc() {
-  // const doc_old: DbDoc<DocData> | null = utools.db.get(DOC_ID_OLD);
-  // if (doc_old) {
-  //   const result = utools.db.put({ ...doc_old, _id: DOC_ID, memos: reviveDates((doc_old as any).data) });
-  //   if (result.ok) {
-  //     doc_old._rev = result.rev;
-  //     utools.db.remove(doc_old);
-  //   }
-  // }
-  const doc: DbDoc<DocData> | null = utools.db.get(DOC_ID);
-  if (doc) {
-    timeMemoDoc = doc;
-    const rawMemos: MemoItemType[] = Array.isArray(doc.memos) ? reviveDates(doc.memos) : [];
-    const rawFolders: Folder[] = Array.isArray(doc.folders) ? doc.folders : [];
-    const rawCurrentFolderId: number | null = typeof doc.currFolderId === 'number' ? doc.currFolderId : null;
+/**
+ * 保存所有memo到数据库
+ */
+export function save_db_memos() {
+  if (!doc_memos) return;
 
-    if (rawFolders.length > 0) {
-      glb.folders = rawFolders.slice();
-      glb.currFolderId = rawCurrentFolderId ?? (glb.folders[0]?.id ?? null);
-    } else {
-      const used = new Set<number>();
-      rawMemos.forEach(m => {
-        if (typeof m.folderId === 'number') used.add(m.folderId as number);
-      });
-      if (used.size === 0) {
-        glb.folders = [{ id: 1, name: '默认' }];
-        glb.currFolderId = 1;
-      } else {
-        const list: Folder[] = Array.from(used).map(id => ({ id, name: `文件夹${id}` }));
-        glb.folders = list.length > 0 ? list : [{ id: 1, name: '默认' }];
-        glb.currFolderId = glb.folders[0]?.id ?? null;
-      }
+  doc_memos.memos = glb.memoList.map(item => (
+    {
+      id: item.id,
+      content: item.content,
+      createdAt: item.createdAt.getTime(),
+      completed: item.completed,
+      completedAt: item.completedAt?.getTime() ?? null,
+      folderName: item.folderName
     }
+  ))
+  doc_memos.currFolder = toRaw(glb.currFolder);
+  doc_memos.folders = toRaw(glb.folders);
 
-    rawMemos.forEach(m => {
-      let fid: number | null = m.folderId ?? glb.currFolderId ?? null;
-      if (fid != null && !glb.folders.some(f => f.id === fid)) {
-        glb.folders.push({ id: fid, name: `文件夹${fid}` });
+  const result = utools.db.put(doc_memos);
+  if (result?.ok)
+    doc_memos._rev = result.rev
+}
+
+/**
+ * 保存所有config到数据库
+ */
+export function save_db_config() {
+  if (!doc_config) return;
+
+  doc_config.sortKey = glb.sortKey;
+  doc_config.sortDirection = glb.sortDirection;
+  doc_config.fixedCompDown = glb.fixedCompDown;
+
+  const result = utools.db.put(doc_config);
+  if (result?.ok)
+    doc_config._rev = result.rev;
+}
+
+function loadDbMemos() {
+  const doc: DbDoc<DocMemos> | null = utools.db.get(DOC_MEMOS_ID);
+
+  if (doc) {
+    doc_memos = doc;
+
+    // ===== 取原始数据 =====
+    const rawMemos: MemoItemType[] = Array.isArray(doc.memos) ? type_change(doc.memos) : [];
+    const rawFolders: FolderType[] = Array.isArray(doc.folders) ? [...doc.folders] : [];
+    const rawCurrFolder: FolderType | null = doc.currFolder && typeof doc.currFolder === 'object' ? doc.currFolder : null;
+
+    // ===== memo：补默认文件夹 =====
+    rawMemos.forEach(it => { if (!it.folderName) { it.folderName = '默认' } });
+
+    // ===== memo 中实际使用的 folderName =====
+    const memoFolderSet = new Set<string>(rawMemos.map(it => it.folderName));
+
+    // ===== 已存在的 folders 名称 =====
+    const folderNameSet = new Set<string>(rawFolders.map(it => it.name));
+
+    // ===== 安全生成起始 id / order =====
+    let nextOrder = rawFolders.length > 0 ? Math.max(...rawFolders.map(it => it.order)) + 1 : 0;
+
+    // ===== 补缺失的 folder =====
+    const newFolders: FolderType[] = [];
+    memoFolderSet.forEach(name => {
+      if (!folderNameSet.has(name)) {
+        newFolders.push({
+          order: nextOrder++,
+          name
+        });
       }
-      m.folderId = fid;
-      glb.memoList.push({ ...m });
     });
+
+    rawFolders.push(...newFolders);
+
+    // ===== 修正 currFolder（防幽灵） =====
+    const validCurrFolder = rawFolders.find(f => f.name === rawCurrFolder?.name) ?? rawFolders[0] ?? null;
+
+    // ===== 写入全局状态 =====
+    glb.memoList = rawMemos.slice();
+    glb.folders = rawFolders.slice();
+    glb.currFolder = validCurrFolder;
+
   } else {
-    const newDoc: DbDoc<DocData> = { _id: DOC_ID, currFolderId: glb.currFolderId, memos: [], folders: [] };
+    // ===== 首次初始化 DB =====
+    const newDoc: DbDoc<DocMemos> = {
+      _id: DOC_MEMOS_ID,
+      memos: [],
+      currFolder: { name: '默认', order: 0 },
+      folders: [{ name: '默认', order: 0 }],
+    };
+
+    glb.memoList = [];
+    glb.folders = newDoc.folders.slice();
+    glb.currFolder = newDoc.currFolder;
+
     const result = utools.db.put(newDoc);
     if (result.ok) {
       newDoc._rev = result.rev;
-      timeMemoDoc = newDoc;
-      glb.memoList = [];
+      doc_memos = newDoc;
     }
   }
 }
 
+function loadDbConfig() {
+  const doc: DbDoc<DocConfig> | null = utools.db.get(DOC_CONFIG_ID);
+  if (doc) {
+    doc_config = doc;
+  } else {
+    const newDoc: DbDoc<DocConfig> = {
+      _id: DOC_CONFIG_ID,
+      sortKey: 'status',
+      sortDirection: 'asc',
+      fixedCompDown: false, // 固定完成项在底部
+    };
+    const result = utools.db.put(newDoc);
+    if (result.ok) {
+      newDoc._rev = result.rev;
+      doc_config = newDoc;
+    }
+  }
+
+  glb.sortKey = doc_config.sortKey;
+  glb.sortDirection = doc_config.sortDirection;
+  glb.fixedCompDown = doc_config.fixedCompDown;
+}
+
 function watchGlb() {
   watch(glb, () => {
-    saveToDbSnapshot();
+    save_db_memos();
   }, { deep: true });
 }
 
-let timeMemoDoc: any;
-export const glb = reactive<GlobalVal>({
-  memoList: [],
-  currFolderId: 1,
-  folders: [{ id: 1, name: '默认' }],
-});
-loadDbDoc();
+let doc_memos: DbDoc<DocMemos> | null = null;
+let doc_config: DbDoc<DocConfig> | null = null;
+export const glb = reactive<GlobalVal>
+  ({
+    memoList: [],
+    currFolder: { name: '默认', order: 0 },
+    folders: [{ name: '默认', order: 0 }],
+    sortKey: 'status',
+    sortDirection: 'asc',
+    fixedCompDown: false,
+  });
+
+loadDbMemos();
+loadDbConfig();
 // watchGlb();
 
 // 自动保存

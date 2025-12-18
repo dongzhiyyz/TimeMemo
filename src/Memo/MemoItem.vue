@@ -118,6 +118,7 @@ defineExpose({
 
         <div class="panel-body">
           <div>内容：{{ item.content }}</div>
+          <div>文件夹：{{ item.folderName }}</div>
           <div>创建时间：{{ formatDateFull(item.createdAt) }}</div>
           <div v-if="item.completed">完成时间：{{ formatDateFull(item.completedAt) }}</div>
           <div v-if="item.completed">花费时间：{{ elapsedTimeText }}</div>

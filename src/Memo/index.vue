@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { MemoItemType } from '../Memo/memo';
-import { glb, saveToDbSnapshot } from '../Memo/memo';
+import type { FolderType, MemoItemType } from '../Memo/memo';
+import { glb, save_db_memos, save_db_config } from '../Memo/memo';
 import { ref, computed, reactive, nextTick } from 'vue';
 import { useConfirm } from '../confirm/confirm';
 import MemoItem from './MemoItem.vue';
@@ -27,29 +27,20 @@ const state = reactive<GlobalState>({
 
 const memoRefs = new Map<number, any>();
 
-// 生成未占用的文件夹ID
-const getNextFolderId = () => {
-  const used = new Set(glb.folders.map(f => f.id));
-  let id = 1;
-  while (used.has(id)) id++;
-  return id;
-};
-
 const addFolder = () => {
   const name = state.newFolderName.trim();
   if (!name) return;
-  const id = getNextFolderId();
-  glb.folders.push({ id, name });
-  glb.currFolderId = id;
+  glb.folders.push({ order: glb.folders.length, name });
+  glb.currFolder = { order: glb.folders.length, name };
   state.newFolderName = '';
 };
 
-const setCurrentFolder = (id: number | null) => {
-  glb.currFolderId = id;
+const setCurrentFolder = (folder: FolderType | null) => {
+  glb.currFolder = folder;
 };
 
 // 获取无重复 ID
-const getNextId = () => {
+const getNextMemoId = () => {
   const used = new Set(glb.memoList.map(m => m.id));
   let id = 1;
   while (used.has(id)) id++;
@@ -59,12 +50,12 @@ const getNextId = () => {
 // ---------- 新增 ----------
 const addMemo = () => {
   const item:MemoItemType = {
-    id: getNextId(),
+    id: getNextMemoId(),
     content: '',
     createdAt: new Date(),
     completed: false,
     completedAt: null,
-    folderId: glb.currFolderId ?? null,
+    folderName: glb.currFolder.name,
   }
   glb.memoList.push(item);
   nextTick(() => {
@@ -80,8 +71,8 @@ const updateContent = (id: number, content: string) => {
     if (item) item.content = content;
   } else {
     glb.memoList = glb.memoList.filter(m => m.id !== id);
-    saveToDbSnapshot();
   }
+  save_db_memos();
 };
 
 const deleteMemo = (id: number) => {
@@ -89,7 +80,7 @@ const deleteMemo = (id: number) => {
     if (!ok) return;
 
     glb.memoList = glb.memoList.filter(m => m.id !== id);
-    saveToDbSnapshot();
+    save_db_memos();
   });
 };
 
@@ -116,23 +107,35 @@ const bulkDeleteSelected = () => {
     const ids = new Set(state.selectedIds);
     glb.memoList = glb.memoList.filter(m => !ids.has(m.id));
     state.selectedIds = [];
-    saveToDbSnapshot();
+    save_db_memos();
   });
 };
 
-const moveTargetFolderId = ref<number | null>(glb.folders[0]?.id ?? null);
+const moveTargetFolderName = ref<string | null>(glb.folders[0]?.name ?? null);
 const bulkMoveSelected = () => {
-  if (state.selectedIds.length === 0 || moveTargetFolderId.value == null) return;
-  const ids = new Set(state.selectedIds);
-  glb.memoList.forEach(m => {
-    if (ids.has(m.id)) m.folderId = moveTargetFolderId.value as number;
+  if (state.selectedIds.length === 0 || moveTargetFolderName.value == null) 
+    return;
+  
+  const memoMap = new Map(glb.memoList.map(m => [m.id, m]));
+  state.selectedIds.forEach(id => {
+    memoMap.get(id)!.folderName = moveTargetFolderName.value!;
   });
+
   state.selectedIds = [];
+  // save_db_memos();
 };
 
 // ---------- 排序 ----------
-const sortKey = ref<'time' | 'status'>('time');
-const sortDirection = ref<'asc' | 'desc'>('asc');
+const sortKey = ref<'time' | 'status'>(glb.sortKey);
+const sortDirection = ref<'asc' | 'desc'>(glb.sortDirection);
+const fixedCompDown = ref<boolean>(glb.fixedCompDown); // 固定完成项在底部
+
+function paramToConfig() {
+  glb.sortKey = sortKey.value;
+  glb.sortDirection = sortDirection.value;
+  glb.fixedCompDown = fixedCompDown.value;
+  save_db_config();
+}
 
 // 点击按钮切换排序方式
 const setSortBy = (key: 'time' | 'status') => {
@@ -148,24 +151,36 @@ const setSortBy = (key: 'time' | 'status') => {
 
 const sortedList = computed(() => {
   const arr = glb.memoList.filter(m => {
-    if (glb.currFolderId == null) return true; // 全部
-    return m.folderId === glb.currFolderId;
+    if (glb.currFolder == null) return true; // 全部
+    return m.folderName === glb.currFolder.name;
   }).slice();
 
   if (sortKey.value === 'time') {
+    // 按创建时间排序
     arr.sort((a, b) =>
       sortDirection.value === 'asc'
         ? a.createdAt.getTime() - b.createdAt.getTime()
         : b.createdAt.getTime() - a.createdAt.getTime()
     );
+
+    // 固定完成项在底部
+    if (fixedCompDown.value) {
+      arr.sort((a, b) => {
+        const v1 = a.completed ? 1 : 0;
+        const v2 = b.completed ? 1 : 0;
+        return v1 - v2;
+      });
+    }
   } else if (sortKey.value === 'status') {
+    // 按完成状态排序
     arr.sort((a, b) => {
       const v1 = a.completed ? 1 : 0;
       const v2 = b.completed ? 1 : 0;
       return sortDirection.value === 'asc' ? v1 - v2 : v2 - v1;
     });
   }
-
+  paramToConfig();  
+  save_db_memos();  
   return arr;
 });
 
@@ -197,12 +212,6 @@ function escapeCsv(str: string | number | boolean): string {
   return s;
 }
 
-function folderNameById(id: number | null | undefined): string {
-  if (id == null) return '';
-  const f = glb.folders.find(x => x.id === id);
-  return f ? f.name : '';
-}
-
 const toCsvRow = (m: MemoItemType) => {
   const created = formatDateCN(m.createdAt); // 人眼可读
   const createdNum = m.createdAt ? +new Date(m.createdAt) : ''; // 时间戳
@@ -210,8 +219,7 @@ const toCsvRow = (m: MemoItemType) => {
   const completedAt = m.completedAt ? formatDateCN(m.completedAt) : '';
   const completedNum = m.completedAt ? +new Date(m.completedAt) : '';
 
-  const folderIdStr = m.folderId == null ? '' : String(m.folderId);
-  const folderNameStr = escapeCsv(folderNameById(m.folderId));
+  const folderName = escapeCsv(m.folderName);
 
   return [
     m.id,
@@ -219,13 +227,11 @@ const toCsvRow = (m: MemoItemType) => {
     created,
     m.completed,
     completedAt,
-    folderIdStr,
-    folderNameStr,
+    folderName,
     createdNum,
     completedNum,
   ].join(',');
 };
-
 
 const exportCsv = async () => {
   if (glb.memoList.length === 0) {
@@ -263,15 +269,15 @@ const parseCsv = (text: string): string[][] => {
   return result.data;
 };
 
-const ensureFolderByName = (name: string) => {
-  const key = (name || '').trim();
-  if (!key) return glb.currFolderId ?? (glb.folders[0]?.id ?? 1);
-  const existing = glb.folders.find(f => f.name === key);
-  if (existing) return existing.id;
-  const id = getNextFolderId();
-  glb.folders.push({ id, name: key });
-  return id;
-};
+// const ensureFolderByName = (name: string) => {
+//   const key = (name || '').trim();
+//   if (!key) return glb.currFolder ?? (glb.folders[0] ?? null);
+//   const existing = glb.folders.find(f => f.name === key);
+//   if (existing) return existing;
+//   const order = glb.folders.length;
+//   glb.folders.push({ order, name: key });
+//   return { order, name: key };
+// };
 
 const importCsvText = async (text: string) => {
   const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
@@ -285,7 +291,6 @@ const importCsvText = async (text: string) => {
   const iCreated = idx('createdAt');
   const iCompleted = idx('completed');
   const iCompletedAt = idx('completedAt');
-  const iFolderId = idx('folderId');
   const iFolderName = idx('folderName');
 
   const incoming: MemoItemType[] = [];
@@ -301,21 +306,10 @@ const importCsvText = async (text: string) => {
     const completedAt = cols[iCompletedAt] ? new Date(cols[iCompletedAt]) : null;
 
     const folderName = (cols[iFolderName] || '').trim();
-    const folderIdStr = cols[iFolderId];
-
-    let folderId: number | null = null;
-    if (folderName) {
-      folderId = ensureFolderByName(folderName);
-    } else if (folderIdStr && !Number.isNaN(Number(folderIdStr))) {
-      folderId = Number(folderIdStr);
-    } else {
-      folderId = glb.currFolderId ?? null;
-    }
-
     const idParsed = Number(idStr);
     const id = Number.isFinite(idParsed) ? idParsed : NaN;
 
-    incoming.push({ id, content, createdAt, completed, completedAt, folderId });
+    incoming.push({ id, content, createdAt, completed, completedAt, folderName });
   }
 
   if (incoming.length === 0) return;
@@ -331,7 +325,7 @@ const importCsvText = async (text: string) => {
 
     if (keepAll) {
       duplicates.forEach(m => {
-        m.id = getNextId();
+        m.id = getNextMemoId();
       });
     } else {
       const keepImport = await useConfirm(
@@ -360,12 +354,12 @@ const importCsvText = async (text: string) => {
   // --- 插入非重复项 ---
   incoming.forEach(m => {
     const isValid = Number.isFinite(m.id) && !existingIds.has(m.id);
-    const nid = isValid ? m.id : getNextId();
+    const nid = isValid ? m.id : getNextMemoId();
     glb.memoList.push({ ...m, id: nid });
     existingIds.add(nid);
   });
 
-  saveToDbSnapshot();
+  save_db_memos();
 };
 
 const triggerImport = () =>{
@@ -414,12 +408,14 @@ const triggerImport = () =>{
         <input placeholder="输入名称" v-model="state.newFolderName" />
         <button class="btn-secondary" @click="addFolder">添加</button>
       </div>
+
       <div class="folder-list">
-        <button class="btn-secondary" :class="{ active: glb.currFolderId === null }"
+        <button class="btn-secondary" :class="{ active: glb.currFolder === null }"
           @click="setCurrentFolder(null)">全部</button>
-        <button class="btn-secondary" v-for="f in glb.folders" :key="f.id"
-          :class="{ active: glb.currFolderId === f.id }" @click="setCurrentFolder(f.id)">{{ f.name }}</button>
+        <button class="btn-secondary" v-for="f in glb.folders" :key="f.order"
+          :class="{ active: glb.currFolder === f }" @click="setCurrentFolder(f)">{{ f.name }}</button>
       </div>
+
     </aside>
 
     <!-- 右侧内容区 -->
@@ -428,12 +424,18 @@ const triggerImport = () =>{
       <div class="toolbar">
         <div class="toolbar-left">
           <button @click="addMemo">新增备忘</button>
-          <button class="btn-secondary" @click="state.manageMode = !state.manageMode">{{ state.manageMode ? '退出管理' :
-            '管理' }}</button>
-          <button class="btn-secondary" @click="state.showSidebar = !state.showSidebar">{{ state.showSidebar ? '隐藏边栏' :
-            '显示边栏' }}</button>
+          <button class="btn-secondary" @click="state.manageMode = !state.manageMode">
+            {{ state.manageMode ? '退出管理' : '管理' }}
+          </button>
+          <button class="btn-secondary" @click="state.showSidebar = !state.showSidebar">
+            {{ state.showSidebar ? '隐藏边栏' : '显示边栏' }}
+          </button>
         </div>
         <div class="toolbar-right">
+          <label style="display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" v-model="fixedCompDown" />
+            固定完成项在底部
+          </label>
           <button class="btn-secondary" @click="setSortBy('time')">
             时间排序
             <span v-if="sortKey === 'time'">
@@ -446,7 +448,6 @@ const triggerImport = () =>{
               {{ sortDirection === 'asc' ? '▲' : '▼' }}
             </span>
           </button>
-          <!-- <input ref="fileInputRef" type="file" accept=".csv" style="display:none" @change="onImportFileChange" /> -->
         </div>
       </div>
 
@@ -457,14 +458,22 @@ const triggerImport = () =>{
             @change="toggleSelectAll(($event.target as HTMLInputElement).checked)" />
           全选当前列表
         </label>
+
         <button @click="bulkDeleteSelected" :disabled="state.selectedIds.length === 0">删除选中</button>
+
+        <div class="spacer"></div>
         <button @click="exportCsv">导出CSV</button>
-        <button class="btn-secondary" @click="triggerImport">导入CSV</button>
-        <select v-model.number="moveTargetFolderId">
-          <option v-for="f in glb.folders" :key="f.id" :value="f.id">{{ f.name }}</option>
+        <button @click="triggerImport">导入CSV</button>
+        <div class="spacer"></div>
+
+        <button @click="bulkMoveSelected" :disabled="state.selectedIds.length === 0 || moveTargetFolderName == null">
+          移动到文件夹
+        </button>
+
+        <select v-model="moveTargetFolderName">
+          <option v-for="f in glb.folders" :key="f.order" :value="f.name">{{ f.name }}</option>
         </select>
-        <button @click="bulkMoveSelected"
-          :disabled="state.selectedIds.length === 0 || moveTargetFolderId == null">移动到文件夹</button>
+
       </div>
 
       <!-- 列表行 -->
