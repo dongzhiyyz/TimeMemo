@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import type { MemoItemType } from '../Memo/memo'
+import type { MemoItemType, MemoPriority } from '../Memo/memo'
 
 const showDetail = ref(false)
 const props = defineProps<{ item: MemoItemType }>()
 const emit = defineEmits<{
-  (e: 'toggle', id: number): void
+  (e: 'toggle', id: number, checked: boolean): void
   (e: 'update', id: number, content: string): void
   (e: 'delete', id: number): void
+  (e: 'updatePriority', id: number, priority: MemoPriority): void
 }>()
 
-/* ---------- 输入框：本地状态 ---------- */
 const localContent = ref(props.item.content)
 watch(
   () => props.item.content,
@@ -21,7 +21,6 @@ watch(
   }
 )
 
-// 父 → 子同步（比如切换 memo、外部修改）
 watch(
   () => props.item.content,
   v => {
@@ -42,7 +41,11 @@ function onDelete() {
   showDetail.value = false
 }
 
-/* ---------- 日期工具 ---------- */
+function setPriority(priority: MemoPriority) {
+  if (props.item.priority === priority) return
+  emit('updatePriority', props.item.id, priority)
+}
+
 const toDate = (d: Date | string | number | null | undefined) => {
   if (!d) return null
   return d instanceof Date ? d : new Date(d)
@@ -61,7 +64,6 @@ const formatDateFull = (date?: Date | string | number | null) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-/* ---------- 花费时间：computed ---------- */
 const elapsedTimeText = computed(() => {
   if (!props.item.completed) return ''
   const start = toDate(props.item.createdAt)
@@ -71,35 +73,41 @@ const elapsedTimeText = computed(() => {
   const diffSec = (end.getTime() - start.getTime()) / 1000
   if (diffSec < 60) return `${Math.floor(diffSec)} 秒`
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分`
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 时`
+  if (diffSec < 86400 * 3) return `${Math.floor(diffSec / 3600)} 时`
   return `${Math.floor(diffSec / 86400)} 天`
 })
 
-// 只暴露引用，不做任何事
 const inputRef = ref<HTMLInputElement | null>(null)
 defineExpose({
   inputRef
 })
-
 </script>
 
 <template>
   <div class="memo-item" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;width:100%;">
-    <!-- 输入框 -->
-    <input ref="inputRef" v-model="localContent" placeholder="输入内容..." style="flex:1;min-width:100px" @blur="onBlur" />
-
-    <!-- 时间 / 花费 -->
-    <div>
-      <span v-if="!item.completed">{{ formatDateShort(item.createdAt) }}</span>
-      <span v-else>{{ elapsedTimeText }}</span>
+    <div class="status-area">
+      <input class="cb-complete" type="checkbox" :checked="props.item.completed"
+        @change="emit('toggle', props.item.id, ($event.target as HTMLInputElement).checked)" />
+      <select class="priority-select" :class="`priority-${props.item.priority}`" :value="props.item.priority"
+        @change="setPriority(($event.target as HTMLSelectElement).value as MemoPriority)">
+        <option value="high">高</option>
+        <option value="medium">中</option>
+        <option value="low">低</option>
+      </select>
     </div>
 
-    <!-- 详情 -->
+    <input ref="inputRef" v-model="localContent" placeholder="输入内容..." style="flex:1;min-width:100px;font-size:13px;"
+      @blur="onBlur" />
+
+    <div class="time-spent">
+      <span v-if="!props.item.completed" class="created-time">{{ formatDateShort(props.item.createdAt) }}</span>
+      <span v-else class="elapsed-time">{{ elapsedTimeText }}</span>
+    </div>
+
     <button @click.stop="showDetail = true" style="padding:2px 6px;">
-      详情
+      ...
     </button>
 
-    <!-- 详情面板 -->
     <div v-if="showDetail" class="detail-overlay" @click="showDetail = false">
       <div class="detail-panel" @click.stop>
         <div class="panel-header">
@@ -113,26 +121,35 @@ defineExpose({
         <div class="panel-body card">
           <div class="card-row">
             <span class="label">内容：</span>
-            <span class="value">{{ item.content }}</span>
+            <span class="value">{{ props.item.content }}</span>
           </div>
           <div class="card-row">
             <span class="label">文件夹：</span>
-            <span class="value">{{ item.folderName }}</span>
+            <span class="value">{{ props.item.folderName }}</span>
           </div>
           <div class="card-row">
             <span class="label">创建时间：</span>
-            <span class="value">{{ formatDateFull(item.createdAt) }}</span>
+            <span class="value">{{ formatDateFull(props.item.createdAt) }}</span>
           </div>
-          <div class="card-row" v-if="item.completed">
-            <span class="label">完成时间：</span>
-            <span class="value">{{ formatDateFull(item.completedAt) }}</span>
+          <div class="card-row" v-if="props.item.firstCompletedAt">
+            <span class="label">首次完成时间：</span>
+            <span class="value">{{ formatDateFull(props.item.firstCompletedAt) }}</span>
           </div>
-          <div class="card-row" v-if="item.completed">
+          <div class="card-row" v-if="props.item.completed">
+            <span class="label">最近完成时间：</span>
+            <span class="value">{{ formatDateFull(props.item.completedAt) }}</span>
+          </div>
+          <div class="card-row" v-if="props.item.completed">
             <span class="label">花费时间：</span>
             <span class="value">{{ elapsedTimeText }}</span>
           </div>
+          <div class="card-row">
+            <span class="label">优先级：</span>
+            <span class="value">
+              {{ props.item.priority === 'high' ? '高' : props.item.priority === 'low' ? '低' : '中' }}
+            </span>
+          </div>
         </div>
-
       </div>
     </div>
   </div>
@@ -153,6 +170,39 @@ defineExpose({
 .memo-item button {
   padding: 2px 6px;
   cursor: pointer;
+}
+
+.status-area {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.priority-select {
+  font-size: 12px;
+  padding: 0 6px;
+  height: 22px;
+  text-align: center;
+  text-align-last: center;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: none;
+  border-radius: 999px;
+}
+
+.priority-select.priority-high {
+  background-color: #fee2e2;
+  color: #b91c1c;
+}
+
+.priority-select.priority-medium {
+  background-color: #fef3c7;
+  color: #8f3e0b;
+}
+
+.priority-select.priority-low {
+  background-color: #dcfce7;
+  color: #166534;
 }
 
 .detail-overlay {
@@ -211,6 +261,18 @@ defineExpose({
   word-break: break-word;
 }
 
+.time-spent {
+  font-size: 13px;
+  width: 50px;
+}
+
+.created-time {
+  color: #000000;
+}
+
+.elapsed-time {
+  color: #02c581;
+}
 
 @keyframes slideInRight {
   from {

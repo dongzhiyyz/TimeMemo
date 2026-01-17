@@ -1,21 +1,30 @@
-import { toRaw, watch, reactive } from 'vue';
+import { reactive } from 'vue';
 
 const DOC_ID_OLD: string = 'time_memo_1';
 const DOC_MEMOS_ID: string = 'time_memo_1';
+const DOC_MEMOS_INDEX_ID: string = 'time_memo_chunks_index';
+const DOC_CHUNK_PREFIX: string = 'time_memo_';
+const MAX_DOC_BYTES = 950 * 1024;
 const DOC_CONFIG_ID: string = 'time_memo_config';
+
+export type MemoPriority = 'high' | 'medium' | 'low';
 
 export interface FolderType {
   order: number;
   name: string;
-};
-export interface MemoItemType {
-  id: number;                   // 唯一标识符
-  content: string;              // 备忘内容
-  createdAt: Date;              // 创建时间
-  completed: boolean;           // 是否完成
-  completedAt?: Date | null;    // 完成时间
-  folderName: string;           // 所属文件夹名称
 }
+
+export interface MemoItemType {
+  id: number;
+  content: string;
+  createdAt: Date;
+  completed: boolean;
+  completedAt?: Date | null;
+  folderName: string;
+  priority: MemoPriority;
+  firstCompletedAt?: Date | null;
+}
+
 export interface MemoItemSaveType {
   id: number;
   content: string;
@@ -23,6 +32,8 @@ export interface MemoItemSaveType {
   completed: boolean;
   completedAt?: number | null;
   folderName: string;
+  priority?: MemoPriority;
+  firstCompletedAt?: number | null;
 }
 export interface GlobalVal {
   memoList: MemoItemType[];
@@ -32,17 +43,28 @@ export interface GlobalVal {
   sortKey: 'status' | 'time';
   sortDirection: 'asc' | 'desc';
   fixedCompDown: boolean;
+  priorityFilter: 'all' | MemoPriority;
+  dateFilter: 'all' | 'day' | 'week' | 'month' | 'year';
+  statusFilter: 'all' | 'completed' | 'uncompleted';
+  dateFilterBaseTime: number | null;
 }
 
 export interface DocConfig {
   sortKey: 'status' | 'time';     // 排序键
   sortDirection: 'asc' | 'desc';  // 排序方向
   fixedCompDown: boolean;         // 固定完成项在底部
+  priorityFilter?: 'all' | MemoPriority;
+  dateFilter?: 'all' | 'day' | 'week' | 'month' | 'year';
+  statusFilter?: 'all' | 'completed' | 'uncompleted';
+  dateFilterBaseTime?: number | null;
 }
 export interface DocMemos {
   memos: MemoItemSaveType[];
   currFolder: FolderType | null;  // 当前文件夹
   folders: FolderType[];          // 文件夹列表
+}
+interface DocIndex {
+  ids: string[];
 }
 
 // export function throttle<T extends (...args: any[]) => any>(fn: T, interval = 500) {
@@ -76,43 +98,128 @@ function type_change(arr: MemoItemSaveType[]): MemoItemType[] {
     ...it,
     createdAt: new Date(it.createdAt),
     completedAt: it.completedAt ? new Date(it.completedAt) : null,
+    priority: it.priority ?? 'medium',
+    firstCompletedAt: it.firstCompletedAt
+      ? new Date(it.firstCompletedAt)
+      : it.completedAt
+        ? new Date(it.completedAt)
+        : null,
   }))
 }
 
-/**
- * 保存所有memo到数据库
- */
 export function save_db_memos() {
   if (!doc_memos) return;
 
-  // 备忘列表 -> 只保留普通 JS 对象和原始值
-  doc_memos.memos = glb.memoList.map(item => ({
+  const allMemos = glb.memoList.map(item => ({
     id: item.id,
     content: item.content,
     createdAt: item.createdAt instanceof Date ? item.createdAt.getTime() : item.createdAt,
     completed: item.completed,
     completedAt: item.completedAt instanceof Date ? item.completedAt.getTime() : item.completedAt ?? null,
-    folderName: item.folderName
+    folderName: item.folderName,
+    priority: item.priority ?? 'medium',
+    firstCompletedAt: item.firstCompletedAt instanceof Date ? item.firstCompletedAt.getTime() : item.firstCompletedAt ?? null,
   }));
 
   // 文件夹列表 -> 浅拷贝成普通对象数组
-  doc_memos.folders = glb.folders.map(f => ({
+  const foldersCopy = glb.folders.map(f => ({
     ...f
   }));
 
   // 当前选中文件夹 -> 保存普通对象，避免 Proxy
-  doc_memos.currFolder = glb.currFolder ?
+  const currFolderCopy = glb.currFolder ?
     {
       ...glb.currFolder
     }
     : null;
 
-  try {
-    const result = utools.db.put(doc_memos);
-    if (result?.ok) doc_memos._rev = result.rev;
-  } catch (err) {
-    console.error('保存备忘数据失败', err);
+  const idxDoc: DbDoc<DocIndex> | null = utools.db.get(DOC_MEMOS_INDEX_ID);
+  const buildSize = (obj: any) => {
+    try {
+      return new TextEncoder().encode(JSON.stringify(obj)).length;
+    } catch {
+      const s = JSON.stringify(obj);
+      return s.length;
+    }
+  };
+
+  const singleDocCandidate: DbDoc<DocMemos> = {
+    _id: DOC_MEMOS_ID,
+    memos: allMemos,
+    currFolder: currFolderCopy,
+    folders: foldersCopy,
+  };
+
+  const needChunk = buildSize(singleDocCandidate) > MAX_DOC_BYTES || !!idxDoc;
+
+  if (!needChunk) {
+    doc_memos.memos = allMemos;
+    doc_memos.folders = foldersCopy;
+    doc_memos.currFolder = currFolderCopy;
+    try {
+      const result = utools.db.put(doc_memos);
+      if (result?.ok) doc_memos._rev = result.rev;
+    } catch (err) {
+      console.error('保存备忘数据失败', err);
+    }
+    return;
   }
+
+  const chunkDocs: DbDoc<DocMemos>[] = [];
+  let currentChunk: MemoItemSaveType[] = [];
+  const ids: string[] = [];
+  const pushChunk = (index: number) => {
+    const id = `${DOC_CHUNK_PREFIX}${index}`;
+    const doc: DbDoc<DocMemos> = {
+      _id: id,
+      memos: currentChunk.slice(),
+      currFolder: index === 1 ? currFolderCopy : null,
+      folders: index === 1 ? foldersCopy : [],
+    };
+    chunkDocs.push(doc);
+    ids.push(id);
+    currentChunk = [];
+  };
+
+  let index = 1;
+  for (let i = 0; i < allMemos.length; i++) {
+    currentChunk.push(allMemos[i]);
+    const testDoc: DbDoc<DocMemos> = {
+      _id: `${DOC_CHUNK_PREFIX}${index}`,
+      memos: currentChunk,
+      currFolder: index === 1 ? currFolderCopy : null,
+      folders: index === 1 ? foldersCopy : [],
+    };
+    if (buildSize(testDoc) > MAX_DOC_BYTES) {
+      if (currentChunk.length === 1) {
+        pushChunk(index);
+        index++;
+      } else {
+        currentChunk.pop();
+        pushChunk(index);
+        index++;
+        currentChunk.push(allMemos[i]);
+      }
+    }
+  }
+  if (currentChunk.length > 0) {
+    pushChunk(index);
+  }
+
+  for (let d of chunkDocs) {
+    const res = utools.db.put(d);
+    if (d._id === DOC_MEMOS_ID && res?.ok) {
+      d._rev = res.rev;
+      doc_memos = d;
+    }
+  }
+
+  const newIdxDoc: DbDoc<DocIndex> = {
+    _id: DOC_MEMOS_INDEX_ID,
+    ids,
+  };
+  const idxRes = utools.db.put(newIdxDoc);
+  if (idxRes?.ok) newIdxDoc._rev = idxRes.rev;
 }
 
 
@@ -125,6 +232,10 @@ export function save_db_config() {
   doc_config.sortKey = glb.sortKey;
   doc_config.sortDirection = glb.sortDirection;
   doc_config.fixedCompDown = glb.fixedCompDown;
+  doc_config.priorityFilter = glb.priorityFilter;
+  doc_config.dateFilter = glb.dateFilter;
+  doc_config.statusFilter = glb.statusFilter;
+  doc_config.dateFilterBaseTime = glb.dateFilterBaseTime;
 
   const result = utools.db.put(doc_config);
   if (result?.ok)
@@ -132,6 +243,50 @@ export function save_db_config() {
 }
 
 function loadDbMemos() {
+  const idx: DbDoc<DocIndex> | null = utools.db.get(DOC_MEMOS_INDEX_ID);
+  if (idx && Array.isArray(idx.ids) && idx.ids.length > 0) {
+    let allMemos: MemoItemType[] = [];
+    let folders: FolderType[] = [];
+    let currFolder: FolderType | null = null;
+    for (let i = 0; i < idx.ids.length; i++) {
+      const id = idx.ids[i];
+      const d: DbDoc<DocMemos> | null = utools.db.get(id);
+      if (!d) continue;
+      if (i === 0) {
+        doc_memos = d;
+        folders = Array.isArray(d.folders) ? [...d.folders] : [];
+        currFolder = d.currFolder && typeof d.currFolder === 'object' ? d.currFolder : null;
+      }
+      const part = Array.isArray(d.memos) ? type_change(d.memos) : [];
+      allMemos = allMemos.concat(part);
+    }
+
+    allMemos.forEach(it => { if (!it.folderName) { it.folderName = '默认' } });
+    const memoFolderSet = new Set<string>(allMemos.map(it => it.folderName));
+    const folderNameSet = new Set<string>(folders.map(it => it.name));
+    let nextOrder = folders.length > 0 ? Math.max(...folders.map(it => it.order)) + 1 : 0;
+    const newFolders: FolderType[] = [];
+    memoFolderSet.forEach(name => {
+      if (!folderNameSet.has(name)) {
+        newFolders.push({
+          order: nextOrder++,
+          name
+        });
+      }
+    });
+    folders.push(...newFolders);
+    folders.forEach(f => {
+      if (!f.order) {
+        f.order = nextOrder++;
+      }
+    });
+    const validCurrFolder = folders.find(f => f.name === currFolder?.name) ?? folders[0] ?? null;
+    glb.memoList = allMemos.slice();
+    glb.folders = folders.slice();
+    glb.currFolder = validCurrFolder;
+    return;
+  }
+
   const doc: DbDoc<DocMemos> | null = utools.db.get(DOC_MEMOS_ID);
 
   if (doc) {
@@ -214,6 +369,10 @@ function loadDbConfig() {
       sortKey: 'status',
       sortDirection: 'asc',
       fixedCompDown: false, // 固定完成项在底部
+      priorityFilter: 'all',
+      dateFilter: 'all',
+      statusFilter: 'all',
+      dateFilterBaseTime: null,
     };
     const result = utools.db.put(newDoc);
     if (result.ok) {
@@ -225,6 +384,10 @@ function loadDbConfig() {
   glb.sortKey = doc_config.sortKey;
   glb.sortDirection = doc_config.sortDirection;
   glb.fixedCompDown = doc_config.fixedCompDown;
+  glb.priorityFilter = doc_config.priorityFilter ?? 'all';
+  glb.dateFilter = doc_config.dateFilter ?? 'all';
+  glb.statusFilter = doc_config.statusFilter ?? 'all';
+  glb.dateFilterBaseTime = doc_config.dateFilterBaseTime ?? null;
 }
 
 // function watchGlb() {
@@ -243,6 +406,10 @@ export const glb = reactive<GlobalVal>
     sortKey: 'status',
     sortDirection: 'asc',
     fixedCompDown: false,
+    priorityFilter: 'all',
+    dateFilter: 'all',
+    statusFilter: 'all',
+    dateFilterBaseTime: null,
   });
 
 loadDbMemos();

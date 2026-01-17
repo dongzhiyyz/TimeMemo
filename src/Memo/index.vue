@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FolderType, MemoItemType } from '../Memo/memo';
+import type { FolderType, MemoItemType, MemoPriority } from '../Memo/memo';
 import { glb, save_db_memos, save_db_config } from '../Memo/memo';
 import { ref, computed, reactive, nextTick } from 'vue';
 import { useConfirm } from '../confirm/confirm';
@@ -66,6 +66,8 @@ const addMemo = () => {
     completed: false,
     completedAt: null,
     folderName: glb.currFolder.name,
+    priority: 'medium',
+    firstCompletedAt: null,
   }
   glb.memoList.push(item);
   nextTick(() => {
@@ -97,8 +99,17 @@ const deleteMemo = (id: number) => {
 const setCompleted = (id: number, checked: boolean) => {
   const item = glb.memoList.find(m => m.id === id);
   if (!item) return;
+  const now = new Date();
   item.completed = checked;
-  item.completedAt = checked ? new Date() : null;
+  if (checked) {
+    if (!item.firstCompletedAt) {
+      item.firstCompletedAt = now;
+    }
+    item.completedAt = now;
+  } else {
+    item.completedAt = null;
+  }
+  save_db_memos();
 };
 
 const toggleSelect = (id: number, checked: boolean) => {
@@ -138,7 +149,7 @@ const bulkMoveSelected = () => {
 // ---------- 排序 ----------
 const sortKey = ref<'time' | 'status'>(glb.sortKey);
 const sortDirection = ref<'asc' | 'desc'>(glb.sortDirection);
-const fixedCompDown = ref<boolean>(glb.fixedCompDown); // 固定完成项在底部
+const fixedCompDown = ref<boolean>(glb.fixedCompDown);
 
 function paramToConfig() {
   glb.sortKey = sortKey.value;
@@ -159,11 +170,99 @@ const setSortBy = (key: 'time' | 'status') => {
   }
 };
 
+const setPriorityFilter = (p: 'all' | MemoPriority) => {
+  glb.priorityFilter = p;
+  save_db_config();
+};
+
+const setDateFilter = (v: 'all' | 'day' | 'week' | 'month' | 'year') => {
+  glb.dateFilter = v;
+  if (v === 'all') {
+    glb.dateFilterBaseTime = null;
+  } else if (!glb.dateFilterBaseTime) {
+    glb.dateFilterBaseTime = Date.now();
+  }
+  save_db_config();
+};
+
+const setStatusFilter = (v: 'all' | 'completed' | 'uncompleted') => {
+  glb.statusFilter = v;
+  save_db_config();
+};
+
+const formatDateInputValue = (time: number | null) => {
+  if (!time) return '';
+  const d = new Date(time);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+const dateFilterBaseDateStr = computed(() => formatDateInputValue(glb.dateFilterBaseTime));
+
+const onDateFilterBaseChange = (value: string) => {
+  if (!value) {
+    glb.dateFilterBaseTime = null;
+  } else {
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) {
+      glb.dateFilterBaseTime = d.getTime();
+    }
+  }
+  save_db_config();
+};
+
 const sortedList = computed(() => {
-  const arr = glb.memoList.filter(m => {
-    if (glb.currFolder == null) return true; // 全部
-    return m.folderName === glb.currFolder.name;
-  }).slice();
+  const base = glb.dateFilterBaseTime ? new Date(glb.dateFilterBaseTime) : new Date();
+  const startOfToday = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+  const startOfNextDay = new Date(startOfToday);
+  startOfNextDay.setDate(startOfNextDay.getDate() + 1);
+
+  const startOfYear = new Date(base.getFullYear(), 0, 1);
+  const startOfNextYear = new Date(base.getFullYear() + 1, 0, 1);
+
+  const startOfMonth = new Date(base.getFullYear(), base.getMonth(), 1);
+  const startOfNextMonth = new Date(base.getFullYear(), base.getMonth() + 1, 1);
+
+  const day = startOfToday.getDay() || 7;
+  const startOfWeek = new Date(startOfToday);
+  startOfWeek.setDate(startOfWeek.getDate() - (day - 1));
+  const startOfNextWeek = new Date(startOfWeek);
+  startOfNextWeek.setDate(startOfNextWeek.getDate() + 7);
+
+  const matchDate = (m: MemoItemType) => {
+    if (glb.dateFilter === 'all') return true;
+    const d = m.createdAt instanceof Date ? m.createdAt : new Date(m.createdAt);
+    if (glb.dateFilter === 'day') {
+      return d >= startOfToday && d < startOfNextDay;
+    }
+    if (glb.dateFilter === 'week') {
+      return d >= startOfWeek && d < startOfNextWeek;
+    }
+    if (glb.dateFilter === 'month') {
+      return d >= startOfMonth && d < startOfNextMonth;
+    }
+    if (glb.dateFilter === 'year') {
+      return d >= startOfYear && d < startOfNextYear;
+    }
+    return true;
+  };
+
+  const matchStatus = (m: MemoItemType) => {
+    if (glb.statusFilter === 'all') return true;
+    if (glb.statusFilter === 'completed') return m.completed;
+    if (glb.statusFilter === 'uncompleted') return !m.completed;
+    return true;
+  };
+
+  const arr = glb.memoList
+    .filter(m => {
+      const folderOk = glb.currFolder == null || m.folderName === glb.currFolder.name;
+      const priorityOk = glb.priorityFilter === 'all' || m.priority === glb.priorityFilter;
+      const dateOk = matchDate(m);
+      const statusOk = matchStatus(m);
+      return folderOk && priorityOk && dateOk && statusOk;
+    })
+    .slice();
 
   if (sortKey.value === 'time') {
     // 按创建时间排序
@@ -223,11 +322,14 @@ function escapeCsv(str: string | number | boolean): string {
 }
 
 const toCsvRow = (m: MemoItemType) => {
-  const created = formatDateCN(m.createdAt); // 人眼可读
-  const createdNum = m.createdAt ? +new Date(m.createdAt) : ''; // 时间戳
+  const created = formatDateCN(m.createdAt);
+  const createdNum = m.createdAt ? +new Date(m.createdAt) : '';
 
   const completedAt = m.completedAt ? formatDateCN(m.completedAt) : '';
   const completedNum = m.completedAt ? +new Date(m.completedAt) : '';
+
+  const firstCompletedAt = m.firstCompletedAt ? formatDateCN(m.firstCompletedAt) : '';
+  const firstCompletedNum = m.firstCompletedAt ? +new Date(m.firstCompletedAt) : '';
 
   const folderName = escapeCsv(m.folderName);
 
@@ -237,8 +339,11 @@ const toCsvRow = (m: MemoItemType) => {
     created,
     m.completed,
     completedAt,
+    firstCompletedAt,
     folderName,
+    m.priority ?? 'medium',
     createdNum,
+    firstCompletedNum,
     completedNum,
   ].join(',');
 };
@@ -248,7 +353,7 @@ const exportCsv = async () => {
     window.alert('没有数据可导出');
     return;
   }
-  const header = 'id,content,created,completed,completedAt,folderId,folderName,createdNum,completedNum,';
+  const header = 'id,content,createdAt,completed,completedAt,firstCompletedAt,folderName,priority,createdNum,firstCompletedNum,completedNum';
   const lines = [header, ...glb.memoList.map(toCsvRow)];
   const text = lines.join('\n');
   const suggestedName = `TimeMemo_${Date.now()}.csv`;
@@ -298,10 +403,12 @@ const importCsvText = async (text: string) => {
 
   const iId = idx('id');
   const iContent = idx('content');
-  const iCreated = idx('createdAt');
+  const iCreated = idx('createdAt') !== -1 ? idx('createdAt') : idx('created');
   const iCompleted = idx('completed');
   const iCompletedAt = idx('completedAt');
-  const iFolderName = idx('folderName');
+  const iFirstCompletedAt = idx('firstCompletedAt');
+  const iFolderName = idx('folderName') !== -1 ? idx('folderName') : idx('folderId');
+  const iPriority = idx('priority');
 
   const incoming: MemoItemType[] = [];
 
@@ -309,17 +416,27 @@ const importCsvText = async (text: string) => {
     const cols = parseCsv(lines[k])[0];
     if (!cols || cols.length < header.length) continue;
 
-    const idStr = cols[iId];
-    const content = cols[iContent] ?? '';
-    const createdAt = cols[iCreated] ? new Date(cols[iCreated]) : new Date();
-    const completed = String(cols[iCompleted]).toLowerCase() === 'true';
-    const completedAt = cols[iCompletedAt] ? new Date(cols[iCompletedAt]) : null;
+    const idStr = iId >= 0 ? cols[iId] : '';
+    const content = iContent >= 0 ? (cols[iContent] ?? '') : '';
+    const createdAt = iCreated >= 0 && cols[iCreated] ? new Date(cols[iCreated]) : new Date();
+    const completed = iCompleted >= 0 ? String(cols[iCompleted]).toLowerCase() === 'true' : false;
+    const completedAt = iCompletedAt >= 0 && cols[iCompletedAt] ? new Date(cols[iCompletedAt]) : null;
+    const firstCompletedAt =
+      iFirstCompletedAt >= 0 && cols[iFirstCompletedAt]
+        ? new Date(cols[iFirstCompletedAt])
+        : completedAt;
 
-    const folderName = (cols[iFolderName] || '').trim();
+    const folderName =
+      iFolderName >= 0 ? (cols[iFolderName] || '').trim() : (glb.currFolder?.name ?? '默认');
+    const rawPriority = iPriority >= 0 ? (cols[iPriority] || '').trim() : '';
+    const priority: MemoPriority =
+      rawPriority === 'high' || rawPriority === 'medium' || rawPriority === 'low'
+        ? rawPriority
+        : 'medium';
     const idParsed = Number(idStr);
     const id = Number.isFinite(idParsed) ? idParsed : NaN;
 
-    incoming.push({ id, content, createdAt, completed, completedAt, folderName });
+    incoming.push({ id, content, createdAt, completed, completedAt, folderName, priority, firstCompletedAt });
   }
 
   if (incoming.length === 0) return;
@@ -471,6 +588,13 @@ async function renameFolder(folder: FolderType) {
   save_db_memos();
 }
 
+const updatePriority = (id: number, priority: MemoPriority) => {
+  const item = glb.memoList.find(m => m.id === id);
+  if (!item) return;
+  item.priority = priority;
+  save_db_memos();
+};
+
 // function deleteFolder(folder) {
 //   if (confirm(`确定删除 ${folder.name} 吗？`)) {
 //     glb.folders = glb.folders.filter(f => f !== folder);
@@ -505,9 +629,85 @@ document.addEventListener('click', hideContextMenu);
 
         <button class="btn-secondary" v-for="f in glb.folders" :key="f.order" :class="{ active: glb.currFolder === f }"
           @click="setCurrentFolder(f)" @contextmenu.prevent="showContextMenu($event, f)">
-          <!-- {{ f.name }}_{{ f.order }} -->
           {{ f.name }}
         </button>
+      </div>
+
+      <div style="margin-top:16px;">
+        <div style="font-weight:bold;margin-bottom:6px;">优先级筛选</div>
+        <div class="toolbar-left">
+          <button class="btn-secondary" :class="{ active: glb.priorityFilter === 'all' }"
+            @click="setPriorityFilter('all')">
+            全部
+          </button>
+          <button class="btn-secondary" :class="{ active: glb.priorityFilter === 'high' }"
+            @click="setPriorityFilter('high')">
+            高
+          </button>
+          <button class="btn-secondary" :class="{ active: glb.priorityFilter === 'medium' }"
+            @click="setPriorityFilter('medium')">
+            中
+          </button>
+          <button class="btn-secondary" :class="{ active: glb.priorityFilter === 'low' }"
+            @click="setPriorityFilter('low')">
+            低
+          </button>
+        </div>
+      </div>
+
+      <div style="margin-top:16px;">
+        <div style="font-weight:bold;margin-bottom:6px;">时间分组</div>
+        
+        <div class="toolbar-left">
+          <button class="btn-secondary" :class="{ active: glb.dateFilter === 'all' }" @click="setDateFilter('all')">
+            全部
+          </button>
+          <button class="btn-secondary" :class="{ active: glb.dateFilter === 'day' }" @click="setDateFilter('day')">
+            按日
+          </button>
+          <button class="btn-secondary" :class="{ active: glb.dateFilter === 'week' }" @click="setDateFilter('week')">
+            按周
+          </button>
+          <button class="btn-secondary" :class="{ active: glb.dateFilter === 'month' }" @click="setDateFilter('month')">
+            按月
+          </button>
+          <button class="btn-secondary" :class="{ active: glb.dateFilter === 'year' }" @click="setDateFilter('year')">
+            按年
+          </button>
+        </div>
+        
+        <div v-if="glb.dateFilter !== 'all'" style="margin-top:8px;">
+          <div class="toolbar-left">
+            <span style="font-size:12px;margin-right:4px;">
+              {{
+                glb.dateFilter === 'day' ? '选择某一天'
+                  : glb.dateFilter === 'week' ? '选择某一周中的任意一天'
+                    : glb.dateFilter === 'month' ? '选择某一月中的任意一天'
+                      : '选择某一年中的任意一天'
+              }}
+            </span>
+            <input type="date" :value="dateFilterBaseDateStr"
+              @change="onDateFilterBaseChange(($event.target as HTMLInputElement).value)" />
+          </div>
+        </div>
+
+      </div>
+
+      <div style="margin-top:16px;">
+        <div style="font-weight:bold;margin-bottom:6px;">完成状态筛选</div>
+        <div class="toolbar-left">
+          <button class="btn-secondary" :class="{ active: glb.statusFilter === 'all' }" @click="setStatusFilter('all')">
+            全部
+          </button>
+          <button class="btn-secondary" :class="{ active: glb.statusFilter === 'completed' }"
+            @click="setStatusFilter('completed')">
+            已完成
+          </button>
+          <button class="btn-secondary" :class="{ active: glb.statusFilter === 'uncompleted' }"
+            @click="setStatusFilter('uncompleted')">
+            未完成
+          </button>
+        </div>
       </div>
 
       <!-- 自定义右键菜单 -->
@@ -580,14 +780,12 @@ document.addEventListener('click', hideContextMenu);
 
       </div>
 
-      <!-- 列表行 -->
       <div v-for="item in sortedList" :key="item.id" class="list-row">
         <input v-if="state.manageMode" class="cb-manage" type="checkbox" :checked="state.selectedIds.includes(item.id)"
           @change="toggleSelect(item.id, ($event.target as HTMLInputElement).checked)" />
-        <input v-else class="cb-complete" type="checkbox" :checked="item.completed"
-          @change="setCompleted(item.id, ($event.target as HTMLInputElement).checked)" />
         <div style="flex:1;">
-          <MemoItem :item="item" @update="updateContent" @delete="deleteMemo" :ref="el => memoRefs.set(item.id, el)" />
+          <MemoItem :item="item" @update="updateContent" @delete="deleteMemo" @toggle="setCompleted"
+            @updatePriority="updatePriority" :ref="el => memoRefs.set(item.id, el)" />
         </div>
       </div>
     </main>
