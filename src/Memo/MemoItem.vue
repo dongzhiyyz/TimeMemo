@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import dayjs from 'dayjs'
 import { ref, computed, watch } from 'vue'
 import type { MemoItemType, MemoPriority } from '../Memo/memo'
 
@@ -46,18 +47,19 @@ function setPriority(priority: MemoPriority) {
   emit('updatePriority', props.item.id, priority)
 }
 
-const toDate = (d: Date | string | number | null | undefined) => {
+const toDate = (d: any) => {
   if (!d) return null
+  if (dayjs.isDayjs(d)) return d.toDate()
   return d instanceof Date ? d : new Date(d)
 }
 
-const formatDateShort = (date?: Date | string | number | null) => {
+const formatDateShort = (date?: any) => {
   const d = toDate(date)
   if (!d) return ''
   return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-const formatDateFull = (date?: Date | string | number | null) => {
+const formatDateFull = (date?: any) => {
   const d = toDate(date)
   if (!d) return ''
   const pad = (n: number) => String(n).padStart(2, '0')

@@ -6,6 +6,12 @@ import { useConfirm } from '../confirm/confirm';
 import { promptInput } from '../confirm/prompt';
 import MemoItem from './MemoItem.vue';
 import Papa from 'papaparse';
+import dayjs, { type Dayjs } from 'dayjs';
+import weekOfYear from 'dayjs/plugin/weekOfYear';
+import isoWeek from 'dayjs/plugin/isoWeek';
+
+dayjs.extend(weekOfYear);
+dayjs.extend(isoWeek); // 支持 ISO 周，周一为一周第一天
 
 // const fileInputRef = ref<HTMLInputElement | null>(null);// 文件输入引用（用于导入CSV）
 interface GlobalState {
@@ -62,7 +68,7 @@ const addMemo = () => {
   const item: MemoItemType = {
     id: getNextMemoId(),
     content: '',
-    createdAt: new Date(),
+    createdAt: dayjs(),
     completed: false,
     completedAt: null,
     folderName: glb.currFolder.name,
@@ -99,7 +105,7 @@ const deleteMemo = (id: number) => {
 const setCompleted = (id: number, checked: boolean) => {
   const item = glb.memoList.find(m => m.id === id);
   if (!item) return;
-  const now = new Date();
+  const now = dayjs();
   item.completed = checked;
   if (checked) {
     if (!item.firstCompletedAt) {
@@ -180,7 +186,7 @@ const setDateFilter = (v: 'all' | 'day' | 'week' | 'month' | 'year') => {
   if (v === 'all') {
     glb.dateFilterBaseTime = null;
   } else if (!glb.dateFilterBaseTime) {
-    glb.dateFilterBaseTime = Date.now();
+    glb.dateFilterBaseTime = dayjs().valueOf();
   }
   save_db_config();
 };
@@ -190,104 +196,94 @@ const setStatusFilter = (v: 'all' | 'completed' | 'uncompleted') => {
   save_db_config();
 };
 
-const formatDateInputValue = (time: number | null) => {
-  if (!time) return '';
-  const d = new Date(time);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
-
-const dateFilterBaseDateStr = computed(() => formatDateInputValue(glb.dateFilterBaseTime));
+// 双向绑定：时间戳 ↔ 日期字符串
+const dateFilterBaseDateStr = computed({
+  get: () => {
+    const t = glb.dateFilterBaseTime;
+    return t != null ? dayjs(t).format('YYYY-MM-DD') : '';
+  },
+  set: (value: string) => {
+    if (!value) {
+      glb.dateFilterBaseTime = null;
+    } else {
+      const d = dayjs(value);
+      if (d.isValid()) {
+        glb.dateFilterBaseTime = d.valueOf(); // 转时间戳
+      }
+    }
+    save_db_config();
+  }
+});
 
 const onDateFilterBaseChange = (value: string) => {
   if (!value) {
     glb.dateFilterBaseTime = null;
   } else {
-    const d = new Date(value);
-    if (!Number.isNaN(d.getTime())) {
-      glb.dateFilterBaseTime = d.getTime();
+    const d = dayjs(value);
+    if (d.isValid()) {
+      glb.dateFilterBaseTime = d.valueOf();
     }
   }
   save_db_config();
 };
 
 const sortedList = computed(() => {
-  const base = glb.dateFilterBaseTime ? new Date(glb.dateFilterBaseTime) : new Date();
-  const startOfToday = new Date(base.getFullYear(), base.getMonth(), base.getDate());
-  const startOfNextDay = new Date(startOfToday);
-  startOfNextDay.setDate(startOfNextDay.getDate() + 1);
+  const baseDay = dayjs(glb.dateFilterBaseTime ?? undefined);
 
-  const startOfYear = new Date(base.getFullYear(), 0, 1);
-  const startOfNextYear = new Date(base.getFullYear() + 1, 0, 1);
-
-  const startOfMonth = new Date(base.getFullYear(), base.getMonth(), 1);
-  const startOfNextMonth = new Date(base.getFullYear(), base.getMonth() + 1, 1);
-
-  const day = startOfToday.getDay() || 7;
-  const startOfWeek = new Date(startOfToday);
-  startOfWeek.setDate(startOfWeek.getDate() - (day - 1));
-  const startOfNextWeek = new Date(startOfWeek);
-  startOfNextWeek.setDate(startOfNextWeek.getDate() + 7);
-
+  // 日期匹配函数
   const matchDate = (m: MemoItemType) => {
     if (glb.dateFilter === 'all') return true;
-    const d = m.createdAt instanceof Date ? m.createdAt : new Date(m.createdAt);
-    if (glb.dateFilter === 'day') {
-      return d >= startOfToday && d < startOfNextDay;
+    const d = m.createdAt;
+
+    switch (glb.dateFilter) {
+      case 'day':
+        return d.isSame(baseDay, 'day');
+      case 'week':
+        return d.isoWeek() === baseDay.isoWeek() && d.year() === baseDay.year();
+      case 'month':
+        return d.isSame(baseDay, 'month');
+      case 'year':
+        return d.isSame(baseDay, 'year');
+      default:
+        return true;
     }
-    if (glb.dateFilter === 'week') {
-      return d >= startOfWeek && d < startOfNextWeek;
-    }
-    if (glb.dateFilter === 'month') {
-      return d >= startOfMonth && d < startOfNextMonth;
-    }
-    if (glb.dateFilter === 'year') {
-      return d >= startOfYear && d < startOfNextYear;
-    }
-    return true;
   };
 
+  // 状态匹配
   const matchStatus = (m: MemoItemType) => {
     if (glb.statusFilter === 'all') return true;
-    if (glb.statusFilter === 'completed') return m.completed;
-    if (glb.statusFilter === 'uncompleted') return !m.completed;
-    return true;
+    return glb.statusFilter === 'completed' ? m.completed : !m.completed;
   };
 
-  const arr = glb.memoList
-    .filter(m => {
-      const folderOk = glb.currFolder == null || m.folderName === glb.currFolder.name;
-      const priorityOk = glb.priorityFilter === 'all' || m.priority === glb.priorityFilter;
-      const dateOk = matchDate(m);
-      const statusOk = matchStatus(m);
-      return folderOk && priorityOk && dateOk && statusOk;
-    })
-    .slice();
+  // 过滤
+  const arr = glb.memoList.filter(m => {
+    const folderOk = !glb.currFolder || m.folderName === glb.currFolder.name;
+    const priorityOk = glb.priorityFilter === 'all' || m.priority === glb.priorityFilter;
+    return folderOk && priorityOk && matchDate(m) && matchStatus(m);
+  });
 
+  // 排序辅助函数
+  const completedValue = (m: MemoItemType) => (m.completed ? 1 : 0);
+
+  // 排序
   if (sortKey.value === 'time') {
-    // 按创建时间排序
-    arr.sort((a, b) =>
-      sortDirection.value === 'asc'
-        ? a.createdAt.getTime() - b.createdAt.getTime()
-        : b.createdAt.getTime() - a.createdAt.getTime()
-    );
+    arr.sort((a, b) => {
+      const cmp = a.createdAt.valueOf() - b.createdAt.valueOf();
+      return sortDirection.value === 'asc' ? cmp : -cmp;
+    });
 
-    // 固定完成项在底部
     if (fixedCompDown.value) {
-      arr.sort((a, b) => {
-        const v1 = a.completed ? 1 : 0;
-        const v2 = b.completed ? 1 : 0;
-        return v1 - v2;
-      });
+      // 固定完成项在底部
+      arr.sort((a, b) => completedValue(a) - completedValue(b));
     }
   } else if (sortKey.value === 'status') {
-    // 按完成状态排序
-    arr.sort((a, b) => {
-      const v1 = a.completed ? 1 : 0;
-      const v2 = b.completed ? 1 : 0;
-      return sortDirection.value === 'asc' ? v1 - v2 : v2 - v1;
-    });
+    arr.sort((a, b) =>
+      sortDirection.value === 'asc'
+        ? completedValue(a) - completedValue(b)
+        : completedValue(b) - completedValue(a)
+    );
   }
+
   paramToConfig();
   save_db_memos();
   return arr;
@@ -306,11 +302,13 @@ const toggleSelectAll = (checked: boolean) => {
 };
 
 // ---------- CSV 导出/导入 ----------
-function formatDateCN(date: Date | string | undefined | null): string {
+function formatDateCN(date: Dayjs | Date | string | number | undefined | null): string {
   if (!date) return '';
+  if (dayjs.isDayjs(date)) {
+    return date.format('YYYY-MM-DD HH:mm:ss');
+  }
   const d = date instanceof Date ? date : new Date(date);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return dayjs(d).format('YYYY-MM-DD HH:mm:ss');
 }
 
 function escapeCsv(str: string | number | boolean): string {
@@ -322,14 +320,14 @@ function escapeCsv(str: string | number | boolean): string {
 }
 
 const toCsvRow = (m: MemoItemType) => {
-  const created = formatDateCN(m.createdAt);
-  const createdNum = m.createdAt ? +new Date(m.createdAt) : '';
+  const created = m.createdAt.format('YYYY-MM-DD HH:mm:ss');
+  const createdNum = m.createdAt ? m.createdAt.valueOf() : '';
 
-  const completedAt = m.completedAt ? formatDateCN(m.completedAt) : '';
-  const completedNum = m.completedAt ? +new Date(m.completedAt) : '';
+  const completedAt = m.completedAt ? m.completedAt.format('YYYY-MM-DD HH:mm:ss') : '';
+  const completedNum = m.completedAt ? m.completedAt.valueOf() : '';
 
-  const firstCompletedAt = m.firstCompletedAt ? formatDateCN(m.firstCompletedAt) : '';
-  const firstCompletedNum = m.firstCompletedAt ? +new Date(m.firstCompletedAt) : '';
+  const firstCompletedAt = m.firstCompletedAt ? m.firstCompletedAt.format('YYYY-MM-DD HH:mm:ss') : '';
+  const firstCompletedNum = m.firstCompletedAt ? m.firstCompletedAt.valueOf() : '';
 
   const folderName = escapeCsv(m.folderName);
 
@@ -356,7 +354,7 @@ const exportCsv = async () => {
   const header = 'id,content,createdAt,completed,completedAt,firstCompletedAt,folderName,priority,createdNum,firstCompletedNum,completedNum';
   const lines = [header, ...glb.memoList.map(toCsvRow)];
   const text = lines.join('\n');
-  const suggestedName = `TimeMemo_${Date.now()}.csv`;
+  const suggestedName = `TimeMemo_${dayjs().valueOf()}.csv`;
 
   if (window.utools.showSaveDialog) {
     const filePath = window.utools.showSaveDialog({
@@ -371,6 +369,7 @@ const exportCsv = async () => {
 
     if (filePath) {
       window.services.writeTextFile2(filePath, text);
+      utools.shellShowItemInFolder(filePath);
       // window.alert(`已导出到: ${filePath}`);
     }
   }
@@ -418,12 +417,12 @@ const importCsvText = async (text: string) => {
 
     const idStr = iId >= 0 ? cols[iId] : '';
     const content = iContent >= 0 ? (cols[iContent] ?? '') : '';
-    const createdAt = iCreated >= 0 && cols[iCreated] ? new Date(cols[iCreated]) : new Date();
+    const createdAt = iCreated >= 0 && cols[iCreated] ? dayjs(cols[iCreated]) : dayjs();
     const completed = iCompleted >= 0 ? String(cols[iCompleted]).toLowerCase() === 'true' : false;
-    const completedAt = iCompletedAt >= 0 && cols[iCompletedAt] ? new Date(cols[iCompletedAt]) : null;
+    const completedAt = iCompletedAt >= 0 && cols[iCompletedAt] ? dayjs(cols[iCompletedAt]) : null;
     const firstCompletedAt =
       iFirstCompletedAt >= 0 && cols[iFirstCompletedAt]
-        ? new Date(cols[iFirstCompletedAt])
+        ? dayjs(cols[iFirstCompletedAt])
         : completedAt;
 
     const folderName =
@@ -618,9 +617,9 @@ document.addEventListener('click', hideContextMenu);
       <div style="font-weight:bold;margin-bottom:8px;">文件夹</div>
 
       <div class="toolbar-left" style="margin-bottom:8px;">
-        <input placeholder="新文件夹名称" v-model="state.newFolderName" />
+        <input placeholder="输入名称" v-model="state.newFolderName" style="flex: 1;" />
+        <button class="full-btn" @click="addFolder">添加</button>
       </div>
-      <button class="full-btn" @click="addFolder">添加文件夹</button>
 
       <div class="folder-list">
         <button class="btn-secondary" :class="{ active: glb.currFolder === null }" @click="setCurrentFolder(null)">
@@ -637,27 +636,19 @@ document.addEventListener('click', hideContextMenu);
         <div style="font-weight:bold;margin-bottom:6px;">优先级筛选</div>
         <div class="toolbar-left">
           <button class="btn-secondary" :class="{ active: glb.priorityFilter === 'all' }"
-            @click="setPriorityFilter('all')">
-            全部
-          </button>
+            @click="setPriorityFilter('all')">全部</button>
           <button class="btn-secondary" :class="{ active: glb.priorityFilter === 'high' }"
-            @click="setPriorityFilter('high')">
-            高
-          </button>
+            @click="setPriorityFilter('high')">高</button>
           <button class="btn-secondary" :class="{ active: glb.priorityFilter === 'medium' }"
-            @click="setPriorityFilter('medium')">
-            中
-          </button>
+            @click="setPriorityFilter('medium')">中</button>
           <button class="btn-secondary" :class="{ active: glb.priorityFilter === 'low' }"
-            @click="setPriorityFilter('low')">
-            低
-          </button>
+            @click="setPriorityFilter('low')">低</button>
         </div>
       </div>
 
       <div style="margin-top:16px;">
         <div style="font-weight:bold;margin-bottom:6px;">时间分组</div>
-        
+
         <div class="toolbar-left">
           <button class="btn-secondary" :class="{ active: glb.dateFilter === 'all' }" @click="setDateFilter('all')">
             全部
@@ -675,15 +666,15 @@ document.addEventListener('click', hideContextMenu);
             按年
           </button>
         </div>
-        
+
         <div v-if="glb.dateFilter !== 'all'" style="margin-top:8px;">
           <div class="toolbar-left">
             <span style="font-size:12px;margin-right:4px;">
               {{
                 glb.dateFilter === 'day' ? '选择某一天'
-                  : glb.dateFilter === 'week' ? '选择某一周中的任意一天'
-                    : glb.dateFilter === 'month' ? '选择某一月中的任意一天'
-                      : '选择某一年中的任意一天'
+                  : glb.dateFilter === 'week' ? '选择某一周'
+                    : glb.dateFilter === 'month' ? '选择某一月'
+                      : '选择某一年'
               }}
             </span>
             <input type="date" :value="dateFilterBaseDateStr"
@@ -725,7 +716,7 @@ document.addEventListener('click', hideContextMenu);
       <div class="toolbar">
 
         <div class="toolbar-left">
-          <button @click="addMemo">新增备忘</button>
+          <button @click="addMemo" :disabled="!glb.currFolder">新增备忘</button>
           <button class="btn-secondary" @click="state.manageMode = !state.manageMode">
             {{ state.manageMode ? '退出管理' : '管理' }}
           </button>
@@ -766,8 +757,8 @@ document.addEventListener('click', hideContextMenu);
         <button @click="bulkDeleteSelected" :disabled="state.selectedIds.length === 0">删除选中</button>
 
         <div class="spacer"></div>
-        <button @click="exportCsv">导出CSV</button>
-        <button @click="triggerImport">导入CSV</button>
+        <button @click="exportCsv">导出全部</button>
+        <button @click="triggerImport">导入数据</button>
         <div class="spacer"></div>
 
         <button @click="bulkMoveSelected" :disabled="state.selectedIds.length === 0 || moveTargetFolderName == null">

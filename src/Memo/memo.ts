@@ -1,6 +1,6 @@
+import dayjs, { type Dayjs } from 'dayjs';
 import { reactive } from 'vue';
 
-const DOC_ID_OLD: string = 'time_memo_1';
 const DOC_MEMOS_ID: string = 'time_memo_1';
 const DOC_MEMOS_INDEX_ID: string = 'time_memo_chunks_index';
 const DOC_CHUNK_PREFIX: string = 'time_memo_';
@@ -17,12 +17,12 @@ export interface FolderType {
 export interface MemoItemType {
   id: number;
   content: string;
-  createdAt: Date;
+  createdAt: Dayjs;
   completed: boolean;
-  completedAt?: Date | null;
+  completedAt?: Dayjs | null;
   folderName: string;
   priority: MemoPriority;
-  firstCompletedAt?: Date | null;
+  firstCompletedAt?: Dayjs | null;
 }
 
 export interface MemoItemSaveType {
@@ -96,13 +96,13 @@ interface DocIndex {
 function type_change(arr: MemoItemSaveType[]): MemoItemType[] {
   return arr.map(it => ({
     ...it,
-    createdAt: new Date(it.createdAt),
-    completedAt: it.completedAt ? new Date(it.completedAt) : null,
+    createdAt: dayjs(it.createdAt),
+    completedAt: it.completedAt ? dayjs(it.completedAt) : null,
     priority: it.priority ?? 'medium',
     firstCompletedAt: it.firstCompletedAt
-      ? new Date(it.firstCompletedAt)
+      ? dayjs(it.firstCompletedAt)
       : it.completedAt
-        ? new Date(it.completedAt)
+        ? dayjs(it.completedAt)
         : null,
   }))
 }
@@ -113,12 +113,12 @@ export function save_db_memos() {
   const allMemos = glb.memoList.map(item => ({
     id: item.id,
     content: item.content,
-    createdAt: item.createdAt instanceof Date ? item.createdAt.getTime() : item.createdAt,
+    createdAt: item.createdAt ? item.createdAt.valueOf() : 0,
     completed: item.completed,
-    completedAt: item.completedAt instanceof Date ? item.completedAt.getTime() : item.completedAt ?? null,
+    completedAt: item.completedAt ? item.completedAt.valueOf() : null,
     folderName: item.folderName,
     priority: item.priority ?? 'medium',
-    firstCompletedAt: item.firstCompletedAt instanceof Date ? item.firstCompletedAt.getTime() : item.firstCompletedAt ?? null,
+    firstCompletedAt: item.firstCompletedAt ? item.firstCompletedAt.valueOf() : null,
   }));
 
   // 文件夹列表 -> 浅拷贝成普通对象数组
